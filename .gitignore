@@ -1,0 +1,28 @@
+# Python virtual environment (standing rule: all Python work runs inside ./venv)
+venv/
+.venv/
+
+# Secrets — never commit
+.env
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ChromaDB persisted vector store (created at runtime)
+chroma_db/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

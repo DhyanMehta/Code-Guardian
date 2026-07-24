@@ -1,0 +1,50 @@
+# CodeGuardian AI — local development stack.
+# LOCAL DEV ONLY: the webhook endpoint uses HMAC signature verification but the stack
+# has no other auth/TLS. Do not expose these services to the public internet.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # Point at the compose Postgres/Chroma services (overrides .env host values).
+      DATABASE_URL: postgresql+psycopg2://guardian:guardian@postgres:5432/codeguardian
+      CHROMA_PERSIST_DIR: /app/chroma_db
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: guardian
+      POSTGRES_PASSWORD: guardian
+      POSTGRES_DB: codeguardian
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U guardian -d codeguardian"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  chromadb:
+    image: chromadb/chroma:1.5.9
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  chroma_data:

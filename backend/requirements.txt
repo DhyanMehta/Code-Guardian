@@ -1,0 +1,38 @@
+# CodeGuardian AI — backend dependencies.
+# Versions pinned and verified against PyPI on 2026-07-24.
+# STANDING RULE: install only inside ./venv (never globally).
+
+# --- Web framework / server ---
+fastapi==0.139.2
+uvicorn[standard]==0.51.0
+
+# --- Config / validation ---
+pydantic==2.13.4
+pydantic-settings==2.14.2
+
+# --- GitHub integration ---
+PyGithub==2.9.1
+
+# --- Agents / orchestration / LLM ---
+langgraph==1.2.9
+langchain-core==1.5.1
+groq==1.5.0
+
+# --- RAG vector store ---
+chromadb==1.5.9
+
+# --- Security scanners (Python-based; Gitleaks is a binary in the Dockerfile) ---
+bandit==1.8.2
+semgrep==1.171.0
+
+# --- Database / migrations ---
+SQLAlchemy==2.0.51
+alembic==1.18.5
+psycopg2-binary==2.9.12
+
+# --- HTTP client (used by tests + outbound calls) ---
+httpx==0.28.1
+
+# --- Testing ---
+pytest==9.1.1
+pytest-asyncio==1.4.0
