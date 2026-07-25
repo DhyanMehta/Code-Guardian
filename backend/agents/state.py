@@ -1,19 +1,26 @@
 
 """Shared typed state for the CodeGuardian LangGraph graph.
 
-Kept intentionally minimal for Session 2. The Supervisor (Session 5) will build a
-``StateGraph`` over :class:`ReviewState`; each specialist agent reads the PR
-metadata + diff and writes its raw findings and LLM-triaged findings into the
-per-agent maps. Using a ``TypedDict`` with reducer-friendly dict fields keeps the
-state compatible with LangGraph 1.x's Graph API.
+The Supervisor (Session 5) builds a ``StateGraph`` over :class:`ReviewState`; each
+specialist agent reads the PR metadata + diff and writes its results into the
+per-agent maps. Using ``Annotated`` fields with dict-merge reducers lets LangGraph
+merge parallel writes from the fan-out nodes without conflicts.
 """
 
 from __future__ import annotations
 
+import operator
 from dataclasses import dataclass, field
-from typing import TypedDict
+from typing import Annotated, Any, TypedDict
 
 from backend.tools.results import RawFinding, Severity
+
+
+def _merge_dicts(left: dict, right: dict) -> dict:
+    """Reducer that shallow-merges two dicts (right wins on key conflict)."""
+    merged = left.copy()
+    merged.update(right)
+    return merged
 
 
 @dataclass
@@ -157,24 +164,20 @@ class ReviewState(TypedDict, total=False):
     """Shared graph state read/written by the specialist agents + supervisor.
 
     ``total=False`` so agents can populate their slice incrementally.
+    Annotated fields use dict-merge reducers so parallel fan-out nodes can each
+    write their keyed slice without conflicting.
     """
 
+    review_id: int
     pr: PRMetadata
     diff: str
-    # Directory containing the checked-out changed files the scanners run against.
     workspace_path: str
 
-    # Per-agent raw (deterministic) findings, keyed by agent name.
-    raw_findings: dict[str, list[RawFinding]]
-    # Per-agent LLM-triaged findings, keyed by agent name.
-    triaged_findings: dict[str, list[TriagedFinding]]
-    # Per-agent, per-scanner status for partial-failure transparency.
-    scanner_statuses: dict[str, list[ScannerStatus]]
-    # Free-form per-agent notes (e.g. "LLM triage skipped: no findings").
-    agent_notes: dict[str, list[str]]
-    # Quality Agent result (RAG-grounded findings).
-    quality_result: dict  # QualityAgentResult serialized; avoids circular import.
-    # Test-Gap Agent result.
-    test_gap_result: dict  # TestGapAgentResult serialized.
-    # Documentation Agent result.
-    doc_result: dict  # DocAgentResult serialized.
+    # Per-agent results, keyed by agent name — merged via _merge_dicts reducer.
+    raw_findings: Annotated[dict[str, list[RawFinding]], _merge_dicts]
+    triaged_findings: Annotated[dict[str, list[TriagedFinding]], _merge_dicts]
+    scanner_statuses: Annotated[dict[str, list[ScannerStatus]], _merge_dicts]
+    agent_notes: Annotated[dict[str, list[str]], _merge_dicts]
+    quality_result: Annotated[dict[str, Any], _merge_dicts]
+    test_gap_result: Annotated[dict[str, Any], _merge_dicts]
+    doc_result: Annotated[dict[str, Any], _merge_dicts]

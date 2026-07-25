@@ -41,7 +41,10 @@ def test_invalid_signature_is_rejected(client: TestClient) -> None:
 def test_valid_signature_pull_request_opened_is_accepted(client: TestClient) -> None:
     payload = {
         "action": "opened",
-        "pull_request": {"number": 42},
+        "pull_request": {
+            "number": 42,
+            "head": {"sha": "abc123", "repo": {"full_name": "acme/widgets"}},
+        },
         "repository": {"full_name": "acme/widgets"},
     }
     body = json.dumps(payload).encode("utf-8")
@@ -57,7 +60,8 @@ def test_valid_signature_pull_request_opened_is_accepted(client: TestClient) -> 
     data = resp.json()
     assert data["status"] == "accepted"
     assert data["repository"] == "acme/widgets"
-    assert data["pull_request"] == "42"
+    assert data["pull_request"] == 42
+    assert "review_id" in data
 
 
 def test_valid_signature_non_pull_request_event_is_ignored(client: TestClient) -> None:

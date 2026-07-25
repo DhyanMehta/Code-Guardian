@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from backend.api import health, reviews, webhooks
+from backend.api import autofix, health, reviews, webhooks
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,6 +39,7 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(webhooks.router)
 app.include_router(reviews.router)
+app.include_router(autofix.router)
 
 
 @app.get("/", tags=["meta"])

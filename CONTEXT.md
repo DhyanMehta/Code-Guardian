@@ -49,15 +49,18 @@ FastAPI webhook receiver  ──►  Review service  ──►  Supervisor Agent
   sharp typography).
 
 ## Current Build Phase
-**Session 4 — Test-Gap Agent + Documentation Agent.**
-Adds the Test-Gap Agent (AST-based detection of untested functions with LLM-drafted
-starter tests, anti-hallucination via function-name anchoring + import validation),
-the Documentation Agent (AST-based detection of missing/outdated docstrings with
-LLM-drafted replacements, anti-hallucination via parameter-name anchoring), shared
-diff-parsing utilities (`_diff_utils.py`), and the PR workspace checkout utility
-(`tools/workspace.py` — shallow-clone context manager with proper cleanup). Sessions
-1 (scaffold + webhook), 2 (security tools + Security Agent), and 3 (RAG + Quality
-Agent) are complete.
+**Session 5 — Supervisor Agent (LangGraph) + Aggregation + Persistence + Auto-Fix Gate.**
+Adds the Supervisor Agent (LangGraph StateGraph with parallel fan-out via `Send` to
+all four specialist agents, partial-failure tolerance per node, dict-merge reducers
+for conflict-free parallel state writes), the report builder (unified severity
+ranking across all agent types, PR-comment markdown formatting), the review service
+(full orchestration lifecycle: DB row creation → workspace checkout → graph invocation
+→ finding persistence → PR comment post → cleanup), the stale-review periodic sweep,
+the concurrent-review guard (PostgreSQL partial unique index), the auto-fix gate
+(branch creation with apply-time re-validation of every fix, fork-PR detection and
+refusal, explicit human approval recording), and all supporting API endpoints.
+Sessions 1 (scaffold + webhook), 2 (security tools + Security Agent), 3 (RAG +
+Quality Agent), and 4 (Test-Gap + Documentation Agents) are complete.
 The project virtual environment now lives at `backend/venv` (relocated from the
 project root so the backend is self-contained); see `RULES.md`.
 (Update this section at the start of each session.)
