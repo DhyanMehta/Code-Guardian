@@ -322,7 +322,9 @@ class DocumentationAgent:
 
             try:
                 raw_response = llm.complete(
-                    system_prompt=_SYSTEM_PROMPT, user_prompt=user_prompt
+                    system_prompt=_SYSTEM_PROMPT,
+                    user_prompt=user_prompt,
+                    json_mode=True,
                 )
             except LLMError as exc:
                 logger.warning("LLM draft failed for %s: %s", fn.name, exc)

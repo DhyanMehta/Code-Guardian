@@ -1,3 +1,4 @@
+
 """Shared typed state for the CodeGuardian LangGraph graph.
 
 Kept intentionally minimal for Session 2. The Supervisor (Session 5) will build a

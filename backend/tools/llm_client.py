@@ -107,8 +107,12 @@ class LLMClient:
         user_prompt: str,
         temperature: float = 0.0,
         max_tokens: int | None = None,
+        json_mode: bool = False,
     ) -> str:
         """Return the model's text completion for the given prompts.
+
+        Args:
+            json_mode: if True, set response_format to force valid JSON output.
 
         Raises:
             LLMAuthError: authentication/authorization failed (not retried).
@@ -123,15 +127,19 @@ class LLMClient:
             {"role": "user", "content": user_prompt},
         ]
 
+        create_kwargs: dict = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if json_mode:
+            create_kwargs["response_format"] = {"type": "json_object"}
+
         last_transient: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                response = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
+                response = self._client.chat.completions.create(**create_kwargs)
                 return self._extract_content(response)
             except (AuthenticationError, PermissionDeniedError) as exc:
                 raise LLMAuthError(f"authentication failed: {exc}") from exc

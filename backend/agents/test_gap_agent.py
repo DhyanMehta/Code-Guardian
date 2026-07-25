@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 
 AGENT_NAME = "test_gap"
 
+# Use the larger model for test drafting — embedding code inside JSON is hard
+# for the 8B model, while docstring/triage tasks work fine on it.
+_DRAFTING_MODEL = "llama-3.3-70b-versatile"
+
 FileReaderFn = Callable[[str], str]
 
 _SYSTEM_PROMPT = (
@@ -346,7 +350,9 @@ class TestGapAgent:
 
             try:
                 raw_response = llm.complete(
-                    system_prompt=_SYSTEM_PROMPT, user_prompt=user_prompt
+                    system_prompt=_SYSTEM_PROMPT,
+                    user_prompt=user_prompt,
+                    json_mode=True,
                 )
             except LLMError as exc:
                 logger.warning("LLM draft failed for %s: %s", fn.name, exc)
@@ -424,7 +430,7 @@ class TestGapAgent:
         if self._llm is not None:
             return self._llm
         try:
-            self._llm = LLMClient()
+            self._llm = LLMClient(model=_DRAFTING_MODEL)
         except LLMConfigError as exc:
             logger.warning("LLM not configured; skipping test drafts: %s", exc)
             return None
