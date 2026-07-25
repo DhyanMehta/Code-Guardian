@@ -1,4 +1,4 @@
-# Python virtual environment (standing rule: all Python work runs inside ./venv)
+# Python virtual environment (standing rule: all Python work runs inside backend/venv)
 venv/
 .venv/
 
@@ -26,3 +26,4 @@ build/
 Thumbs.db
 .idea/
 .vscode/
+.kiro

@@ -17,7 +17,7 @@ engineering rules, and [`ENDPOINTS.md`](ENDPOINTS.md) for the API contract.
 - Git
 
 ## Standing environment rule
-All Python work runs inside the project virtual environment at `./venv`. **Always
+All Python work runs inside the project virtual environment at `backend/venv`. **Always
 activate it before any Python command** and never install packages globally. See
 `RULES.md`.
 
@@ -25,14 +25,14 @@ activate it before any Python command** and never install packages globally. See
 
 ```powershell
 # From the project root
-python -m venv venv
+python -m venv backend\venv
 
 # Activate (Windows PowerShell)
-venv\Scripts\Activate.ps1
-# Windows cmd:            venv\Scripts\activate.bat
-# Linux/macOS/Docker:     source venv/bin/activate
+backend\venv\Scripts\Activate.ps1
+# Windows cmd:            backend\venv\Scripts\activate.bat
+# Linux/macOS/Docker:     source backend/venv/bin/activate
 
-# Confirm the venv is active (should resolve inside ...\Code-Guardian\venv)
+# Confirm the venv is active (should resolve inside ...\Code-Guardian\backend\venv)
 where python        # PowerShell/cmd
 python --version
 

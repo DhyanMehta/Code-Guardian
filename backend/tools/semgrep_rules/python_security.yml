@@ -1,0 +1,168 @@
+rules:
+  - id: python-dangerous-eval
+    patterns:
+      - pattern: eval(...)
+    message: >-
+      Use of eval() can execute arbitrary code. Prefer ast.literal_eval() for
+      parsing data, or refactor to avoid dynamic evaluation entirely.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+      confidence: HIGH
+
+  - id: python-dangerous-exec
+    patterns:
+      - pattern: exec(...)
+    message: >-
+      Use of exec() can execute arbitrary code. Refactor to avoid dynamic code
+      execution.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+      confidence: HIGH
+
+  - id: python-subprocess-shell-true
+    patterns:
+      - pattern: subprocess.$FUNC(..., shell=True, ...)
+    message: >-
+      Subprocess call with shell=True allows shell injection if any argument is
+      user-controlled. Use a list of arguments without shell=True instead.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      confidence: HIGH
+
+  - id: python-os-system
+    patterns:
+      - pattern: os.system(...)
+    message: >-
+      os.system() invokes a shell and is vulnerable to command injection. Use
+      subprocess.run() with a list of arguments instead.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      confidence: HIGH
+
+  - id: python-pickle-loads
+    patterns:
+      - pattern: pickle.loads(...)
+    message: >-
+      Deserializing untrusted data with pickle can lead to arbitrary code
+      execution. Use a safe serialization format (JSON, MessagePack) instead.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      confidence: HIGH
+
+  - id: python-pickle-load
+    patterns:
+      - pattern: pickle.load(...)
+    message: >-
+      Deserializing untrusted data with pickle can lead to arbitrary code
+      execution. Use a safe serialization format (JSON, MessagePack) instead.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      confidence: HIGH
+
+  - id: python-yaml-unsafe-load
+    patterns:
+      - pattern: yaml.load(..., Loader=yaml.Loader, ...)
+      - pattern: yaml.load(..., Loader=yaml.UnsafeLoader, ...)
+      - pattern: yaml.unsafe_load(...)
+    message: >-
+      Using yaml.load() with an unsafe Loader can execute arbitrary code. Use
+      yaml.safe_load() instead.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      confidence: HIGH
+
+  - id: python-sql-injection-format
+    patterns:
+      - pattern: |
+          $CURSOR.execute("..." % ..., ...)
+      - pattern: |
+          $CURSOR.execute(f"...", ...)
+      - pattern: |
+          $CURSOR.execute("...".format(...), ...)
+    message: >-
+      SQL query built with string formatting is vulnerable to SQL injection. Use
+      parameterized queries instead.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+      confidence: MEDIUM
+
+  - id: python-hardcoded-secret
+    patterns:
+      - pattern: $VAR = "..."
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i)(password|passwd|secret|secret_key|api_key|apikey|token|auth_token|access_key)
+    message: >-
+      Possible hardcoded secret in variable assignment. Use environment variables
+      or a secrets manager instead.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      confidence: MEDIUM
+
+  - id: python-tempfile-insecure
+    patterns:
+      - pattern: tempfile.mktemp(...)
+    message: >-
+      tempfile.mktemp() is insecure due to a race condition between file name
+      generation and file creation. Use tempfile.mkstemp() or
+      tempfile.NamedTemporaryFile() instead.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-377: Insecure Temporary File"
+      confidence: HIGH
+
+  - id: python-assert-used
+    pattern: assert ...
+    message: >-
+      assert statements are removed when Python is run with -O. Do not use assert
+      for security-critical checks; use explicit if/raise instead.
+    languages: [python]
+    severity: INFO
+    metadata:
+      cwe: "CWE-617: Reachable Assertion"
+      confidence: LOW
+
+  - id: python-md5-sha1-weak-hash
+    patterns:
+      - pattern: hashlib.md5(...)
+      - pattern: hashlib.sha1(...)
+    message: >-
+      MD5 and SHA-1 are cryptographically broken. Use SHA-256 or stronger for
+      security-sensitive hashing.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-328: Use of Weak Hash"
+      confidence: MEDIUM
+
+  - id: python-request-without-timeout
+    patterns:
+      - pattern: requests.get(...)
+      - pattern-not: requests.get(..., timeout=..., ...)
+    message: >-
+      HTTP request without an explicit timeout can hang indefinitely. Always pass
+      a timeout parameter.
+    languages: [python]
+    severity: INFO
+    metadata:
+      cwe: "CWE-400: Uncontrolled Resource Consumption"
+      confidence: MEDIUM

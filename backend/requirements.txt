@@ -1,6 +1,6 @@
 # CodeGuardian AI — backend dependencies.
 # Versions pinned and verified against PyPI on 2026-07-24.
-# STANDING RULE: install only inside ./venv (never globally).
+# STANDING RULE: install only inside backend/venv (never globally).
 
 # --- Web framework / server ---
 fastapi==0.139.2

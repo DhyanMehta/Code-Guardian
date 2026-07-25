@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: codeguardian-backend
+Version: 0.1.0
+Summary: CodeGuardian AI backend (FastAPI + LangGraph multi-agent code review).
+Requires-Python: >=3.10

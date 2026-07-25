@@ -10,15 +10,25 @@ fallbacks). See ``RULES.md``.
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Resolve the .env file(s) to absolute paths so secrets load regardless of the
+# current working directory (uvicorn/pytest/alembic are all launched from the
+# project root, but the .env may live either at the project root or inside the
+# self-contained ``backend/`` package). Files are listed lowest-to-highest
+# precedence; a value in a later file overrides an earlier one.
+_BACKEND_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _BACKEND_DIR.parent
+_ENV_FILES = (_PROJECT_ROOT / ".env", _BACKEND_DIR / ".env")
 
 
 class Settings(BaseSettings):
     """Typed application settings sourced from the environment / ``.env``."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_ENV_FILES,
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
@@ -28,6 +38,12 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     github_token: str = ""
     github_webhook_secret: str = ""
+
+    # LLM configuration (Groq). Model must be a currently-supported Groq model id;
+    # verify against Groq's model catalogue if changed.
+    groq_model: str = "llama-3.1-8b-instant"
+    groq_timeout_seconds: int = 30
+    groq_max_retries: int = 3
 
     # Infrastructure.
     database_url: str = (

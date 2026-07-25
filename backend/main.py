@@ -1,6 +1,6 @@
 """CodeGuardian AI — FastAPI application entrypoint.
 
-Run locally (with the venv active):
+Run locally (with the backend/venv active):
 
     uvicorn backend.main:app --reload
 """

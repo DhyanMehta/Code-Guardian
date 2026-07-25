@@ -1,0 +1,28 @@
+# Docker build context exclusions (build context = project root; see docker-compose.yml).
+# Keeps the Python virtual environment and local caches out of the image — the image
+# installs its own dependencies via backend/requirements.txt.
+
+**/venv/
+**/.venv/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# Secrets — never bake into an image.
+.env
+
+# Runtime artifacts.
+chroma_db/
+
+# VCS / editor.
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# Frontend (not needed by the backend image).
+frontend/node_modules/
+frontend/dist/
+frontend/build/

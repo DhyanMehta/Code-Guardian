@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codeguardian-backend"
+version = "0.1.0"
+description = "CodeGuardian AI backend (FastAPI + LangGraph multi-agent code review)."
+requires-python = ">=3.10"
+# Runtime dependencies are pinned in backend/requirements.txt (installed separately
+# per RULES.md); this project is not published, so dependencies are intentionally
+# not duplicated here.
+dependencies = []
+
+# Makes the `backend` package importable from any working directory / invocation
+# style (python -c, plain script execution, uvicorn, pytest, alembic) once installed
+# editable into backend/venv — without changing any "from backend.x import y" style
+# imports inside the codebase.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*"]
+exclude = ["backend.venv*", "backend.tests*"]

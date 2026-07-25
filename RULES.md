@@ -4,16 +4,16 @@ These rules are binding for **every** session in this repository, including all 
 implementation sessions. Read this file before doing any work.
 
 ## Environment
-1. A Python virtual environment lives at `./venv`. **ALWAYS activate it before running
-   ANY Python-related command** — installing dependencies, running FastAPI, running
-   scanners (Semgrep / Bandit / Gitleaks), and running tests.
-   - Windows PowerShell: `venv\Scripts\Activate.ps1`
-   - Windows cmd: `venv\Scripts\activate.bat`
-   - Linux/macOS / inside Docker: `source venv/bin/activate`
+1. A Python virtual environment lives at `backend/venv`. **ALWAYS activate it before
+   running ANY Python-related command** — installing dependencies, running FastAPI,
+   running scanners (Semgrep / Bandit / Gitleaks), and running tests.
+   - Windows PowerShell: `backend\venv\Scripts\Activate.ps1`
+   - Windows cmd: `backend\venv\Scripts\activate.bat`
+   - Linux/macOS / inside Docker: `source backend/venv/bin/activate`
 2. Before running any Python command, **CONFIRM the venv is active** (verify `where python`
-   / `which python` resolves inside `...\Code-Guardian\venv`). If it is not active, activate
-   it first — do not run the command against a global interpreter.
-3. **NEVER install Python packages globally.** All installs go into `./venv`.
+   / `which python` resolves inside `...\Code-Guardian\backend\venv`). If it is not active,
+   activate it first — do not run the command against a global interpreter.
+3. **NEVER install Python packages globally.** All installs go into `backend/venv`.
 4. **Pin dependency versions** in `backend/requirements.txt`. No unpinned or open ranges.
 
 ## Correctness & Integrity

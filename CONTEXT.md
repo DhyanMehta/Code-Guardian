@@ -49,13 +49,21 @@ FastAPI webhook receiver  ──►  Review service  ──►  Supervisor Agent
   sharp typography).
 
 ## Current Build Phase
-**Session 1 — scaffold + venv + Docker + env + FastAPI skeleton + GitHub webhook receiver.**
+**Session 3 — ChromaDB RAG ingestion + Quality Agent.**
+Adds a real coding-standards document (naming, complexity, style rules), a chunking +
+embedding ingestion pipeline (idempotent via content-hash IDs, explicit error hierarchy),
+a typed retriever with relevance filtering and error signaling, and the Quality Agent
+(RAG-grounded findings only — citations validated against passage indices, ungrounded
+findings dropped, same anti-hallucination principle as the Security Agent). Sessions 1
+(scaffold + webhook) and 2 (security tools + Security Agent) are complete.
+The project virtual environment now lives at `backend/venv` (relocated from the
+project root so the backend is self-contained); see `RULES.md`.
 (Update this section at the start of each session.)
 
 ### Session roadmap
-1. Scaffold + webhook skeleton *(current)*
-2. Security tools integration + Security Agent
-3. ChromaDB RAG ingestion + Quality Agent
+1. Scaffold + webhook skeleton *(complete)*
+2. Security tools integration + Security Agent *(complete)*
+3. ChromaDB RAG ingestion + Quality Agent *(complete)*
 4. Test-Gap Agent + Documentation Agent
 5. Supervisor Agent (LangGraph) + aggregation + persistence + auto-fix gate
 6. React + Tailwind dashboard
@@ -75,3 +83,7 @@ FastAPI webhook receiver  ──►  Review service  ──►  Supervisor Agent
 - Auto-merge without human approval.
 - Model fine-tuning; production-grade scaling / HA.
 - Languages beyond the primary target set for the scanners (Python-first to start).
+
+
+
+
