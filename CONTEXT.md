@@ -49,13 +49,15 @@ FastAPI webhook receiver  ──►  Review service  ──►  Supervisor Agent
   sharp typography).
 
 ## Current Build Phase
-**Session 3 — ChromaDB RAG ingestion + Quality Agent.**
-Adds a real coding-standards document (naming, complexity, style rules), a chunking +
-embedding ingestion pipeline (idempotent via content-hash IDs, explicit error hierarchy),
-a typed retriever with relevance filtering and error signaling, and the Quality Agent
-(RAG-grounded findings only — citations validated against passage indices, ungrounded
-findings dropped, same anti-hallucination principle as the Security Agent). Sessions 1
-(scaffold + webhook) and 2 (security tools + Security Agent) are complete.
+**Session 4 — Test-Gap Agent + Documentation Agent.**
+Adds the Test-Gap Agent (AST-based detection of untested functions with LLM-drafted
+starter tests, anti-hallucination via function-name anchoring + import validation),
+the Documentation Agent (AST-based detection of missing/outdated docstrings with
+LLM-drafted replacements, anti-hallucination via parameter-name anchoring), shared
+diff-parsing utilities (`_diff_utils.py`), and the PR workspace checkout utility
+(`tools/workspace.py` — shallow-clone context manager with proper cleanup). Sessions
+1 (scaffold + webhook), 2 (security tools + Security Agent), and 3 (RAG + Quality
+Agent) are complete.
 The project virtual environment now lives at `backend/venv` (relocated from the
 project root so the backend is self-contained); see `RULES.md`.
 (Update this section at the start of each session.)
@@ -64,7 +66,7 @@ project root so the backend is self-contained); see `RULES.md`.
 1. Scaffold + webhook skeleton *(complete)*
 2. Security tools integration + Security Agent *(complete)*
 3. ChromaDB RAG ingestion + Quality Agent *(complete)*
-4. Test-Gap Agent + Documentation Agent
+4. Test-Gap Agent + Documentation Agent *(complete)*
 5. Supervisor Agent (LangGraph) + aggregation + persistence + auto-fix gate
 6. React + Tailwind dashboard
 7. End-to-end testing on real repos + polish + demo

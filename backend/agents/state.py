@@ -73,6 +73,85 @@ class SecurityAgentResult:
         return [s.scanner for s in self.scanner_statuses if s.ok]
 
 
+@dataclass
+class FunctionInfo:
+    """A function/method extracted from a source file via AST."""
+
+    name: str
+    file_path: str
+    start_line: int
+    end_line: int
+    source: str
+    is_method: bool = False
+    class_name: str | None = None
+    complexity: int = 0  # count of branching nodes (if/for/while/try/except)
+    params: list[str] = field(default_factory=list)
+    return_annotation: str | None = None
+
+
+@dataclass
+class TestGap:
+    """A function identified as lacking direct test coverage."""
+
+    function: FunctionInfo
+    risk_score: int = 0
+
+
+@dataclass
+class DraftedTest:
+    """A starter unit test drafted by the LLM for a test gap."""
+
+    target_function: str
+    target_file: str
+    test_code: str
+    imports_valid: bool = True
+
+
+@dataclass
+class TestGapAgentResult:
+    """Typed output of the Test-Gap Agent."""
+
+    gaps: list[TestGap] = field(default_factory=list)
+    drafted_tests: list[DraftedTest] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def has_gaps(self) -> bool:
+        return len(self.gaps) > 0
+
+
+@dataclass
+class DocTarget:
+    """A function flagged for missing or outdated documentation."""
+
+    function: FunctionInfo
+    reason: str  # "missing" | "outdated" | "incomplete"
+    existing_docstring: str | None = None
+
+
+@dataclass
+class DraftedDocstring:
+    """A replacement docstring drafted by the LLM."""
+
+    target_function: str
+    target_file: str
+    docstring: str
+    params_valid: bool = True
+
+
+@dataclass
+class DocAgentResult:
+    """Typed output of the Documentation Agent."""
+
+    flagged_functions: list[DocTarget] = field(default_factory=list)
+    drafted_docstrings: list[DraftedDocstring] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def has_findings(self) -> bool:
+        return len(self.flagged_functions) > 0
+
+
 class ReviewState(TypedDict, total=False):
     """Shared graph state read/written by the specialist agents + supervisor.
 
@@ -94,3 +173,7 @@ class ReviewState(TypedDict, total=False):
     agent_notes: dict[str, list[str]]
     # Quality Agent result (RAG-grounded findings).
     quality_result: dict  # QualityAgentResult serialized; avoids circular import.
+    # Test-Gap Agent result.
+    test_gap_result: dict  # TestGapAgentResult serialized.
+    # Documentation Agent result.
+    doc_result: dict  # DocAgentResult serialized.
