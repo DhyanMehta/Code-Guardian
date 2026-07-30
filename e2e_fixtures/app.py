@@ -14,7 +14,7 @@ DB_PASSWORD = "sup3rs3cr3t_pr0duction_pw"
 
 
 def get_user_from_db(user_id):
-    """Fetch user from database using raw SQL - SQL INJECTION VULNERABILITY."""
+    """Fetch a user from the database by their ID."""
     conn = sqlite3.connect("app.db")
     cursor = conn.cursor()
     # SQL Injection: directly interpolating user input into query
@@ -25,6 +25,7 @@ def get_user_from_db(user_id):
 
 
 def run_dynamic_code(code_string):
+    """Evaluates and executes a string of Python code."""
     result = eval(code_string)
     return result
 
@@ -146,10 +147,7 @@ def process_data(data):
 
 
 def build_report(data, user_id, format_type, include_headers=True):
-    """Build a report for the given user and data.
-
-    This function is excessively long to violate coding standards.
-    """
+    """Build a report for the given user and data, formatted according to the specified type and including headers if requested."""
     user = get_user_from_db(user_id)
     processed = process_data(data)
     report_lines = []
