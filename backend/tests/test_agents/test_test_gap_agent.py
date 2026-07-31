@@ -441,3 +441,89 @@ class TestTestGapAgentEdgeCases:
         # "process" is called via s.process() in tests — should be detected
         gap_names = [g.function.name for g in result.gaps]
         assert "process" not in gap_names
+
+
+class TestRiskScoreNormalization:
+    """Regression: risk scores were unbounded (73/10, 87/10). Must be 0-10."""
+
+    def test_risk_score_within_bounds(self, tmp_path) -> None:
+        """A complex function with risky keywords must still score <= 10."""
+        _write_file(tmp_path, "app.py", textwrap.dedent("""\
+            import subprocess
+            import os
+            import sqlite3
+
+            def dangerous_handler(data):
+                if not data:
+                    raise ValueError("empty")
+                if data.get("cmd"):
+                    result = subprocess.run(data["cmd"], shell=True)
+                    if result.returncode != 0:
+                        raise RuntimeError("failed")
+                conn = sqlite3.connect("app.db")
+                cursor = conn.cursor()
+                cursor.execute(f"SELECT * FROM users WHERE id = {data['id']}")
+                user = cursor.fetchone()
+                if not user:
+                    raise ValueError("not found")
+                import requests
+                resp = requests.get(f"http://api.example.com/user/{user[0]}")
+                if resp.status_code != 200:
+                    raise RuntimeError("api error")
+                with open("/tmp/log.txt", "a") as f:
+                    f.write(str(data))
+                os.system("echo done")
+                return {"user": user, "response": resp.json()}
+        """))
+
+        diff = (
+            "--- a/app.py\n+++ b/app.py\n@@ -0,0 +1,25 @@\n"
+            "+import subprocess\n+import os\n+import sqlite3\n+\n"
+            "+def dangerous_handler(data):\n"
+            "+    if not data:\n+        raise ValueError(\"empty\")\n"
+            "+    if data.get(\"cmd\"):\n"
+            "+        result = subprocess.run(data[\"cmd\"], shell=True)\n"
+            "+        if result.returncode != 0:\n"
+            "+            raise RuntimeError(\"failed\")\n"
+            "+    conn = sqlite3.connect(\"app.db\")\n"
+            "+    cursor = conn.cursor()\n"
+            "+    cursor.execute(f\"SELECT * FROM users WHERE id = {data['id']}\")\n"
+            "+    user = cursor.fetchone()\n"
+            "+    if not user:\n+        raise ValueError(\"not found\")\n"
+            "+    import requests\n"
+            "+    resp = requests.get(f\"http://api.example.com/user/{user[0]}\")\n"
+            "+    if resp.status_code != 200:\n"
+            "+        raise RuntimeError(\"api error\")\n"
+            "+    with open(\"/tmp/log.txt\", \"a\") as f:\n"
+            "+        f.write(str(data))\n"
+            "+    os.system(\"echo done\")\n"
+            "+    return {\"user\": user, \"response\": resp.json()}\n"
+        )
+
+        llm = _FakeLLM(json.dumps({"test_code": "", "imports": []}))
+        agent = TestGapAgent(llm_client=llm)
+
+        result = agent.run(diff, ["app.py"], str(tmp_path))
+
+        assert result.has_gaps
+        for gap in result.gaps:
+            assert 0 <= gap.risk_score <= 10, (
+                f"{gap.function.name} has risk_score={gap.risk_score}, expected 0-10"
+            )
+
+    def test_simple_function_low_risk_score(self, tmp_path) -> None:
+        _write_file(tmp_path, "app.py", """\
+            def simple_add(a, b):
+                return a + b
+        """)
+
+        diff = "--- a/app.py\n+++ b/app.py\n@@ -0,0 +1,2 @@\n+def simple_add(a, b):\n+    return a + b\n"
+
+        llm = _FakeLLM(json.dumps({"test_code": "", "imports": []}))
+        agent = TestGapAgent(llm_client=llm)
+
+        result = agent.run(diff, ["app.py"], str(tmp_path))
+
+        assert result.has_gaps
+        assert result.gaps[0].risk_score <= 10
+        assert result.gaps[0].risk_score > 0
