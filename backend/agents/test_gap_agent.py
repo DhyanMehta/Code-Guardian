@@ -314,16 +314,16 @@ class TestGapAgent:
         """Sort gaps by risk score (higher = riskier = should be tested first)."""
         for gap in gaps:
             fn = gap.function
-            score = fn.complexity * 3
+            raw_score = fn.complexity * 3
             body_length = fn.end_line - fn.start_line + 1
-            score += min(body_length, 50)
+            raw_score += min(body_length, 50)
             risky_keywords = ("open(", "subprocess", "os.system", "sql",
                               "execute", "request", "connect")
             source_lower = fn.source.lower()
             for kw in risky_keywords:
                 if kw in source_lower:
-                    score += 5
-            gap.risk_score = score
+                    raw_score += 5
+            gap.risk_score = round(min(raw_score / 10.0, 10.0), 1)
 
         return sorted(gaps, key=lambda g: g.risk_score, reverse=True)
 

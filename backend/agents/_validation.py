@@ -4,6 +4,10 @@ Extracted from test_gap_agent.py and documentation_agent.py so that the autofix
 service can re-check fixes immediately before writing them to disk. These are the
 same anti-hallucination checks from Session 4, but run against the current code
 state at apply time (which may have diverged from review time).
+
+:func:`collect_defined_symbols` generalizes the same AST anchoring to every kind of
+definition (functions, classes, methods, module-level names) so the Quality Agent can
+verify that a symbol an LLM claims to have found actually exists.
 """
 
 from __future__ import annotations
@@ -12,8 +16,24 @@ import ast
 import logging
 import os
 import re
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SymbolInfo:
+    """Where a defined symbol lives in a source file, and what kind it is."""
+
+    name: str
+    kind: str  # "function" | "class" | "variable"
+    start_line: int
+    end_line: int
+
+    @property
+    def line_count(self) -> int:
+        """Number of source lines the definition spans (inclusive)."""
+        return max(1, self.end_line - self.start_line + 1)
 
 
 def module_exists(module_path: str, workspace_path: str) -> bool:
@@ -24,16 +44,71 @@ def module_exists(module_path: str, workspace_path: str) -> bool:
     return os.path.isfile(file_path) or os.path.isfile(pkg_path)
 
 
-def function_exists_in_file(func_name: str, file_path: str) -> bool:
-    """Check if a function/method with the given name exists in the file via AST."""
+def _parse_file(file_path: str, purpose: str) -> ast.AST | None:
+    """Parse a source file, returning ``None`` when it is missing or unparseable."""
     if not os.path.isfile(file_path):
-        return False
+        return None
     try:
         with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             source = f.read()
-        tree = ast.parse(source)
+        return ast.parse(source)
     except (SyntaxError, OSError) as exc:
-        logger.warning("Cannot parse %s for validation: %s", file_path, exc)
+        logger.warning("Cannot parse %s for %s: %s", file_path, purpose, exc)
+        return None
+
+
+def collect_defined_symbols(file_path: str) -> dict[str, SymbolInfo] | None:
+    """Map every symbol defined in ``file_path`` to its :class:`SymbolInfo`.
+
+    Covers functions, async functions, classes, methods (recorded under their bare
+    name), and module-level assignments — i.e. everything an LLM could plausibly
+    claim a quality violation is "about". The first definition of a name wins.
+
+    Returns:
+        The symbol table, or ``None`` if the file is missing or cannot be parsed.
+        ``None`` and ``{}`` mean different things: unknown versus genuinely empty.
+    """
+    tree = _parse_file(file_path, "symbol collection")
+    if tree is None:
+        return None
+
+    symbols: dict[str, SymbolInfo] = {}
+
+    def _record(name: str, kind: str, node: ast.AST) -> None:
+        if not name or name in symbols:
+            return
+        start = getattr(node, "lineno", 0) or 0
+        end = getattr(node, "end_lineno", None) or start
+        symbols[name] = SymbolInfo(
+            name=name, kind=kind, start_line=start, end_line=end
+        )
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            _record(node.name, "function", node)
+        elif isinstance(node, ast.ClassDef):
+            _record(node.name, "class", node)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    _record(target.id, "variable", node)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name):
+                _record(node.target.id, "variable", node)
+
+    return symbols
+
+
+def symbol_exists_in_file(symbol: str, file_path: str) -> bool:
+    """Check whether ``symbol`` is defined anywhere in ``file_path`` via AST."""
+    symbols = collect_defined_symbols(file_path)
+    return symbols is not None and symbol in symbols
+
+
+def function_exists_in_file(func_name: str, file_path: str) -> bool:
+    """Check if a function/method with the given name exists in the file via AST."""
+    tree = _parse_file(file_path, "validation")
+    if tree is None:
         return False
 
     for node in ast.walk(tree):
@@ -45,14 +120,8 @@ def function_exists_in_file(func_name: str, file_path: str) -> bool:
 
 def get_function_params(func_name: str, file_path: str) -> set[str] | None:
     """Return the parameter names for a function, or None if not found."""
-    if not os.path.isfile(file_path):
-        return None
-    try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-            source = f.read()
-        tree = ast.parse(source)
-    except (SyntaxError, OSError) as exc:
-        logger.warning("Cannot parse %s for param extraction: %s", file_path, exc)
+    tree = _parse_file(file_path, "param extraction")
+    if tree is None:
         return None
 
     for node in ast.walk(tree):
@@ -154,6 +223,40 @@ def validate_drafted_docstring(
         )
 
     return True, ""
+
+
+def validate_naming_convention(symbol: str, info: SymbolInfo) -> tuple[bool, str]:
+    """Check if a symbol actually violates a naming convention.
+
+    Returns (violates, reason). If ``violates`` is False, the symbol conforms to
+    the expected convention for its kind and any finding claiming otherwise is a
+    false positive.
+    """
+    if not symbol or symbol.startswith("_"):
+        stripped = symbol.lstrip("_")
+        if not stripped:
+            return False, "dunder/private names are not subject to public naming rules"
+    else:
+        stripped = symbol
+
+    if info.kind == "class":
+        if _is_pascal_case(stripped):
+            return False, f"'{symbol}' already follows PascalCase"
+    else:
+        if _is_snake_case(stripped):
+            return False, f"'{symbol}' already follows snake_case"
+
+    return True, ""
+
+
+def _is_snake_case(name: str) -> bool:
+    """Return True if name is valid snake_case (lowercase + underscores + digits)."""
+    return bool(re.fullmatch(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*", name))
+
+
+def _is_pascal_case(name: str) -> bool:
+    """Return True if name is valid PascalCase (starts upper, no underscores)."""
+    return bool(re.fullmatch(r"[A-Z][a-zA-Z0-9]*", name))
 
 
 def _extract_module_from_import(import_line: str) -> str | None:
