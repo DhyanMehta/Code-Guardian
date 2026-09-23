@@ -3,6 +3,11 @@
 Fans out to Security, Quality, Test-Gap, and Documentation agents in parallel via
 LangGraph's Send API. Each agent node catches its own exceptions (partial-failure
 tolerance). After all agents complete, the aggregate node merges results.
+
+Every node also reports a structured :class:`AgentOutcome` into ``agent_outcomes``.
+That is the single source of truth for whether an agent actually ran; downstream
+consumers must not infer it from note wording, which is written for humans and will
+drift.
 """
 
 from __future__ import annotations
@@ -14,7 +19,7 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-from backend.agents.state import ReviewState
+from backend.agents.state import AgentOutcome, ReviewState
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +31,23 @@ def _run_security_node(state: ReviewState) -> dict[str, Any]:
     from backend.agents.security_agent import SecurityAgent
 
     workspace_path = state.get("workspace_path", "")
+    diff = state.get("diff", "")
     agent_name = "security"
     try:
         agent = SecurityAgent()
-        result = agent.run(workspace_path)
+        result = agent.run(workspace_path, diff)
+        # The agent reports its own outcome (it knows whether triage succeeded).
+        outcome = result.outcome
+        # Every scanner failing also means no security signal at all, which must not
+        # be reported as a clean run even though triage was never attempted.
+        if result.failed_scanners and not result.succeeded_scanners:
+            outcome = AgentOutcome.DEGRADED
         return {
             "raw_findings": {agent_name: result.raw_findings},
             "triaged_findings": {agent_name: result.triaged_findings},
             "scanner_statuses": {agent_name: result.scanner_statuses},
             "agent_notes": {agent_name: result.notes},
+            "agent_outcomes": {agent_name: outcome.value},
         }
     except Exception as exc:
         logger.exception("Security agent failed: %s", exc)
@@ -43,6 +56,7 @@ def _run_security_node(state: ReviewState) -> dict[str, Any]:
             "triaged_findings": {agent_name: []},
             "scanner_statuses": {agent_name: []},
             "agent_notes": {agent_name: [f"Agent failed: {exc}"]},
+            "agent_outcomes": {agent_name: AgentOutcome.FAILED.value},
         }
 
 
@@ -53,19 +67,33 @@ def _run_quality_node(state: ReviewState) -> dict[str, Any]:
     diff = state.get("diff", "")
     pr = state.get("pr")
     changed_files = pr.changed_files if pr else []
+    workspace_path = state.get("workspace_path", "")
     agent_name = "quality"
     try:
         agent = QualityAgent()
-        result = agent.run(diff, changed_files)
+        # workspace_path enables the AST symbol-existence gates.
+        result = agent.run(diff, changed_files, workspace_path)
+        serialized = asdict(result)
+        serialized["outcome"] = result.outcome.value
+        serialized["failure_reason"] = result.failure_reason
         return {
-            "quality_result": {agent_name: asdict(result)},
+            "quality_result": {agent_name: serialized},
             "agent_notes": {agent_name: result.notes},
+            "agent_outcomes": {agent_name: result.outcome.value},
         }
     except Exception as exc:
         logger.exception("Quality agent failed: %s", exc)
         return {
-            "quality_result": {agent_name: {"findings": [], "notes": []}},
+            "quality_result": {
+                agent_name: {
+                    "findings": [],
+                    "notes": [],
+                    "outcome": AgentOutcome.FAILED.value,
+                    "failure_reason": str(exc),
+                }
+            },
             "agent_notes": {agent_name: [f"Agent failed: {exc}"]},
+            "agent_outcomes": {agent_name: AgentOutcome.FAILED.value},
         }
 
 
@@ -89,12 +117,14 @@ def _run_test_gap_node(state: ReviewState) -> dict[str, Any]:
         return {
             "test_gap_result": {agent_name: serialized},
             "agent_notes": {agent_name: result.notes},
+            "agent_outcomes": {agent_name: AgentOutcome.OK.value},
         }
     except Exception as exc:
         logger.exception("Test-gap agent failed: %s", exc)
         return {
             "test_gap_result": {agent_name: {"gaps": [], "drafted_tests": [], "notes": []}},
             "agent_notes": {agent_name: [f"Agent failed: {exc}"]},
+            "agent_outcomes": {agent_name: AgentOutcome.FAILED.value},
         }
 
 
@@ -118,12 +148,14 @@ def _run_documentation_node(state: ReviewState) -> dict[str, Any]:
         return {
             "doc_result": {agent_name: serialized},
             "agent_notes": {agent_name: result.notes},
+            "agent_outcomes": {agent_name: AgentOutcome.OK.value},
         }
     except Exception as exc:
         logger.exception("Documentation agent failed: %s", exc)
         return {
             "doc_result": {agent_name: {"flagged_functions": [], "drafted_docstrings": [], "notes": []}},
             "agent_notes": {agent_name: [f"Agent failed: {exc}"]},
+            "agent_outcomes": {agent_name: AgentOutcome.FAILED.value},
         }
 
 
@@ -143,20 +175,18 @@ def _aggregate(state: ReviewState) -> dict[str, Any]:
     All per-agent state is already merged via the Annotated reducers by the time
     this node executes. This node logs status and passes through.
     """
-    succeeded = []
-    failed = []
+    outcomes = state.get("agent_outcomes", {})
+    by_outcome: dict[AgentOutcome, list[str]] = {}
     for name in AGENT_NAMES:
-        notes = state.get("agent_notes", {}).get(name, [])
-        if any(n.startswith("Agent failed:") for n in notes):
-            failed.append(name)
-        else:
-            succeeded.append(name)
+        outcome = AgentOutcome.coerce(outcomes.get(name, AgentOutcome.OK.value))
+        by_outcome.setdefault(outcome, []).append(name)
 
     logger.info(
-        "Aggregation complete: %d/%d agents succeeded (failed: %s)",
-        len(succeeded),
+        "Aggregation complete: %d/%d agents OK (degraded: %s, failed: %s)",
+        len(by_outcome.get(AgentOutcome.OK, [])),
         len(AGENT_NAMES),
-        failed or "none",
+        by_outcome.get(AgentOutcome.DEGRADED) or "none",
+        by_outcome.get(AgentOutcome.FAILED) or "none",
     )
     return {}
 

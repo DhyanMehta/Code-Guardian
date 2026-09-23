@@ -2,16 +2,22 @@
 
 Normalizes findings from all four specialist agents into a unified schema, ranks
 them by severity, and renders a single PR-comment markdown string.
+
+Agent status comes from the structured ``agent_outcomes`` slice of the graph state,
+never from note text. A count of zero findings is ambiguous on its own: it means
+"clean" for an agent that ran and "unknown" for one that could not, and reporting
+the latter as a success hides a broken review.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from backend.agents.state import ReviewState
+from backend.agents.state import AgentOutcome, ReviewState
 from backend.agents.supervisor import AGENT_NAMES
 from backend.tools.results import Severity
 
@@ -42,6 +48,12 @@ _SEVERITY_LABELS = {
     Severity.UNKNOWN: "❓ Unknown",
 }
 
+_OUTCOME_DISPLAY = {
+    AgentOutcome.OK: ("✅", ""),
+    AgentOutcome.DEGRADED: ("⚠️", " could not run"),
+    AgentOutcome.FAILED: ("❌", " failed"),
+}
+
 
 @dataclass
 class UnifiedFinding:
@@ -56,6 +68,9 @@ class UnifiedFinding:
     category: str = ""
     fixable: bool = False
     fix_data: dict | None = None
+    record_id: int | None = None
+    """Database id when this finding was rebuilt from a persisted row. Lets callers
+    map a ranked result back to the ORM record without re-deriving the order."""
 
 
 @dataclass
@@ -63,10 +78,15 @@ class AgentStatus:
     """Summary status for one agent's run."""
 
     name: str
-    succeeded: bool = True
+    outcome: AgentOutcome = AgentOutcome.OK
     finding_count: int = 0
     error_message: str | None = None
     scanner_info: str | None = None
+
+    @property
+    def succeeded(self) -> bool:
+        """True only when the agent actually completed its analysis."""
+        return self.outcome is AgentOutcome.OK
 
 
 @dataclass
@@ -99,6 +119,39 @@ def aggregate(state: ReviewState) -> AggregatedReport:
     return AggregatedReport(findings=findings, agent_statuses=statuses)
 
 
+def _agent_outcome(state: ReviewState, agent_name: str) -> AgentOutcome:
+    """Read an agent's structured outcome, defaulting to OK when unreported."""
+    outcomes = state.get("agent_outcomes", {}) or {}
+    return AgentOutcome.coerce(outcomes.get(agent_name, AgentOutcome.OK.value))
+
+
+def _first_note(notes: list[str]) -> str | None:
+    return notes[0] if notes else None
+
+
+def format_scanner_info(scanner_statuses: Iterable[Any]) -> str | None:
+    """Render per-scanner outcomes as the compact string used in Agent Status.
+
+    Shared by the live-review path (which has ``ScannerStatus`` dataclasses) and the
+    replay-from-database path (which has dicts), so a report re-rendered from
+    persisted rows is identical to the comment that was posted.
+    """
+    parts: list[str] = []
+    for status in scanner_statuses or []:
+        if isinstance(status, dict):
+            scanner = status.get("scanner", "unknown")
+            ok = bool(status.get("ok"))
+            error_type = status.get("error_type")
+        else:
+            scanner = status.scanner
+            ok = status.ok
+            error_type = status.error_type
+        parts.append(
+            f"{scanner} OK" if ok else f"{scanner} failed ({error_type or 'unknown'})"
+        )
+    return ", ".join(parts) if parts else None
+
+
 def _sort_key(f: UnifiedFinding) -> tuple[int, int, str, int]:
     return (
         _SEVERITY_ORDER.get(f.severity, 99),
@@ -115,24 +168,17 @@ def _aggregate_security(
 ) -> None:
     agent_name = "security"
     notes = state.get("agent_notes", {}).get(agent_name, [])
-    is_failed = any(n.startswith("Agent failed:") for n in notes)
+    outcome = _agent_outcome(state, agent_name)
 
     triaged = state.get("triaged_findings", {}).get(agent_name, [])
     scanner_statuses = state.get("scanner_statuses", {}).get(agent_name, [])
 
-    scanner_parts = []
-    for ss in scanner_statuses:
-        if ss.ok:
-            scanner_parts.append(f"{ss.scanner} OK")
-        else:
-            scanner_parts.append(f"{ss.scanner} failed ({ss.error_type or 'unknown'})")
-
     statuses.append(AgentStatus(
         name=agent_name,
-        succeeded=not is_failed,
+        outcome=outcome,
         finding_count=len(triaged),
-        error_message=notes[0] if is_failed and notes else None,
-        scanner_info=", ".join(scanner_parts) if scanner_parts else None,
+        error_message=_first_note(notes) if outcome is not AgentOutcome.OK else None,
+        scanner_info=format_scanner_info(scanner_statuses),
     ))
 
     for tf in triaged:
@@ -154,16 +200,24 @@ def _aggregate_quality(
 ) -> None:
     agent_name = "quality"
     notes = state.get("agent_notes", {}).get(agent_name, [])
-    is_failed = any(n.startswith("Agent failed:") for n in notes)
-
     quality_data = state.get("quality_result", {}).get(agent_name, {})
     quality_findings = quality_data.get("findings", [])
 
+    # The agent reports its own outcome; prefer that over the graph-level default so
+    # a degraded run (no RAG context, unusable LLM response) is never shown as clean.
+    outcome = _agent_outcome(state, agent_name)
+    if "outcome" in quality_data:
+        outcome = AgentOutcome.coerce(quality_data.get("outcome"))
+
+    error_message = quality_data.get("failure_reason")
+    if not error_message and outcome is not AgentOutcome.OK:
+        error_message = _first_note(notes)
+
     statuses.append(AgentStatus(
         name=agent_name,
-        succeeded=not is_failed,
+        outcome=outcome,
         finding_count=len(quality_findings),
-        error_message=notes[0] if is_failed and notes else None,
+        error_message=error_message,
     ))
 
     for qf in quality_findings:
@@ -187,7 +241,7 @@ def _aggregate_test_gap(
 ) -> None:
     agent_name = "test_gap"
     notes = state.get("agent_notes", {}).get(agent_name, [])
-    is_failed = any(n.startswith("Agent failed:") for n in notes)
+    outcome = _agent_outcome(state, agent_name)
 
     tg_data = state.get("test_gap_result", {}).get(agent_name, {})
     gaps = tg_data.get("gaps", [])
@@ -200,9 +254,9 @@ def _aggregate_test_gap(
 
     statuses.append(AgentStatus(
         name=agent_name,
-        succeeded=not is_failed,
+        outcome=outcome,
         finding_count=len(gaps),
-        error_message=notes[0] if is_failed and notes else None,
+        error_message=_first_note(notes) if outcome is not AgentOutcome.OK else None,
     ))
 
     for gap in gaps:
@@ -240,7 +294,7 @@ def _aggregate_documentation(
 ) -> None:
     agent_name = "documentation"
     notes = state.get("agent_notes", {}).get(agent_name, [])
-    is_failed = any(n.startswith("Agent failed:") for n in notes)
+    outcome = _agent_outcome(state, agent_name)
 
     doc_data = state.get("doc_result", {}).get(agent_name, {})
     flagged = doc_data.get("flagged_functions", [])
@@ -253,9 +307,9 @@ def _aggregate_documentation(
 
     statuses.append(AgentStatus(
         name=agent_name,
-        succeeded=not is_failed,
+        outcome=outcome,
         finding_count=len(flagged),
-        error_message=notes[0] if is_failed and notes else None,
+        error_message=_first_note(notes) if outcome is not AgentOutcome.OK else None,
     ))
 
     for target in flagged:
@@ -292,12 +346,22 @@ def format_pr_comment(
     lines.append("")
 
     # Status line
-    succeeded = sum(1 for s in report.agent_statuses if s.succeeded)
     total = len(report.agent_statuses)
+    succeeded = sum(1 for s in report.agent_statuses if s.succeeded)
+    degraded = sum(
+        1 for s in report.agent_statuses if s.outcome is AgentOutcome.DEGRADED
+    )
+    failed = sum(1 for s in report.agent_statuses if s.outcome is AgentOutcome.FAILED)
+
     if succeeded == total:
         status_text = f"Completed ({total}/{total} agents succeeded)"
     else:
-        status_text = f"Completed ({succeeded}/{total} agents succeeded, {total - succeeded} failed)"
+        detail_parts = [f"{succeeded}/{total} agents succeeded"]
+        if degraded:
+            detail_parts.append(f"{degraded} could not run")
+        if failed:
+            detail_parts.append(f"{failed} failed")
+        status_text = f"Completed ({', '.join(detail_parts)})"
     lines.append(f"**Status**: {status_text}")
     if commit_sha:
         lines.append(f"**Commit**: `{commit_sha[:7]}`")
@@ -320,6 +384,17 @@ def format_pr_comment(
 
         if report.fixable_count:
             lines.append(f"- Auto-fix available for {report.fixable_count} finding(s)")
+
+    # An agent that could not run makes the whole report incomplete; say so next to
+    # the counts rather than only in the status table further down.
+    incomplete = [s for s in report.agent_statuses if not s.succeeded]
+    if incomplete:
+        names = ", ".join(s.name.replace("_", " ").title() for s in incomplete)
+        lines.append("")
+        lines.append(
+            f"> **Incomplete review**: {names} did not run, so this report does not "
+            "cover that area. Counts above are a lower bound."
+        )
     lines.append("")
 
     # Findings table by severity
@@ -355,13 +430,16 @@ def format_pr_comment(
     lines.append("| Agent | Status | Findings |")
     lines.append("|-------|--------|----------|")
     for s in report.agent_statuses:
-        status_icon = "✅" if s.succeeded else "❌"
+        icon, label = _OUTCOME_DISPLAY.get(s.outcome, _OUTCOME_DISPLAY[AgentOutcome.OK])
         extra = ""
         if s.scanner_info:
             extra = f" ({s.scanner_info})"
         elif s.error_message:
-            extra = f" ({s.error_message[:60]})"
-        lines.append(f"| {s.name.replace('_', ' ').title()} | {status_icon}{extra} | {s.finding_count} |")
+            extra = f" ({s.error_message[:80]})"
+        count = s.finding_count if s.succeeded else "—"
+        lines.append(
+            f"| {s.name.replace('_', ' ').title()} | {icon}{label}{extra} | {count} |"
+        )
     lines.append("")
 
     # Auto-fix note
@@ -395,3 +473,55 @@ def _format_location(f: UnifiedFinding) -> str:
     if f.file_path:
         return f"`{f.file_path}`"
     return "-"
+
+
+def aggregate_from_records(records: Iterable[Any]) -> AggregatedReport:
+    """Rank already-persisted findings using the same ordering as a live review.
+
+    ``aggregate()`` works from graph state, which only exists during a run. The
+    dashboard and the report endpoint work from database rows, and they must present
+    findings in exactly the order the PR comment used — so the ordering stays here,
+    in the module that defines it, rather than being reimplemented per consumer.
+
+    Args:
+        records: ORM ``Finding`` rows (anything exposing agent/severity/title/
+            detail/file_path/line/fix_data/id).
+
+    Returns:
+        An :class:`AggregatedReport` with ranked findings and no agent statuses;
+        callers supply statuses from their own source of truth.
+    """
+    findings: list[UnifiedFinding] = []
+    for record in records:
+        raw_fix = getattr(record, "fix_data", None)
+        if isinstance(raw_fix, str) and raw_fix:
+            try:
+                fix_data = json.loads(raw_fix)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Finding %s has unparseable fix_data; treating as not fixable.",
+                    getattr(record, "id", "?"),
+                )
+                fix_data = None
+        elif isinstance(raw_fix, dict):
+            fix_data = raw_fix
+        else:
+            fix_data = None
+
+        findings.append(
+            UnifiedFinding(
+                agent=record.agent,
+                severity=Severity.normalize(record.severity),
+                title=record.title,
+                detail=record.detail or "",
+                file_path=record.file_path,
+                line=record.line,
+                category=record.title,
+                fixable=fix_data is not None,
+                fix_data=fix_data,
+                record_id=getattr(record, "id", None),
+            )
+        )
+
+    findings.sort(key=_sort_key)
+    return AggregatedReport(findings=findings, agent_statuses=[])

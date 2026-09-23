@@ -278,3 +278,83 @@ class TestFormatDocstring:
         lines = _format_docstring(doc, "    ")
         assert lines[0] == '    """Summary line.\n'
         assert lines[-1] == '    """\n'
+
+
+class TestAutofixOutcomePersistence:
+    """The applied/skipped split must outlive the HTTP response that reported it.
+
+    It is the evidence that apply-time re-validation rejected unusable fixes, so the
+    dashboard has to still have it after a page refresh.
+    """
+
+    def _patched_result(self, db, monkeypatch, result: AutofixResult):
+        review = _create_completed_review(db)
+        monkeypatch.setattr(
+            "backend.services.autofix_service._apply_fixes_and_push",
+            lambda **kwargs: result,
+        )
+        monkeypatch.setattr(
+            "backend.services.autofix_service.get_settings",
+            lambda: MagicMock(require=lambda _field: "fake-token"),
+        )
+        return review
+
+    def test_applied_count_and_skipped_fixes_are_persisted(self, db_session, monkeypatch):
+        result = AutofixResult(
+            applied_fixes=[
+                AppliedFix(target_function="calculate", target_file="src/utils.py",
+                           fix_type="docstring"),
+            ],
+            skipped_fixes=[
+                SkippedFix(target_function="process_data", target_file="src/app.py",
+                           reason="Import references non-existent module 'src'"),
+            ],
+        )
+        review = self._patched_result(db_session, monkeypatch, result)
+
+        create_autofix(db_session, review.id)
+
+        db_session.refresh(review)
+        assert review.autofix_status == "pending_approval"
+        assert review.autofix_applied_count == 1
+
+        stored = json.loads(review.autofix_skipped_fixes)
+        assert len(stored) == 1
+        assert stored[0]["target"] == "src/app.py:process_data"
+        assert stored[0]["target_function"] == "process_data"
+        assert "non-existent module" in stored[0]["reason"]
+
+    def test_no_skips_persists_an_empty_list_not_null(self, db_session, monkeypatch):
+        """An empty list means "nothing was rejected"; null would mean "unknown"."""
+        result = AutofixResult(
+            applied_fixes=[
+                AppliedFix(target_function="calculate", target_file="src/utils.py",
+                           fix_type="docstring"),
+            ],
+            skipped_fixes=[],
+        )
+        review = self._patched_result(db_session, monkeypatch, result)
+
+        create_autofix(db_session, review.id)
+
+        db_session.refresh(review)
+        assert review.autofix_applied_count == 1
+        assert json.loads(review.autofix_skipped_fixes) == []
+
+    def test_create_autofix_uses_installation_token(self, db_session, monkeypatch):
+        review = _create_completed_review(db_session)
+        review.installation_id = 998877
+        db_session.commit()
+
+        captured_token = {}
+
+        def mock_apply(review, findings, branch_name, token):
+            captured_token["token"] = token
+            return AutofixResult(applied_fixes=[AppliedFix("fn", "file.py", "docstring")])
+
+        monkeypatch.setattr("backend.services.autofix_service._apply_fixes_and_push", mock_apply)
+        with patch("backend.tools.github_app.get_installation_token", return_value="inst-tok-456") as mock_git_token:
+            create_autofix(db_session, review.id)
+            mock_git_token.assert_called_once_with(998877)
+            assert captured_token["token"] == "inst-tok-456"
+

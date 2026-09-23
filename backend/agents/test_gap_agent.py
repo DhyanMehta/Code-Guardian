@@ -38,7 +38,7 @@ AGENT_NAME = "test_gap"
 
 # Use the larger model for test drafting — embedding code inside JSON is hard
 # for the 8B model, while docstring/triage tasks work fine on it.
-_DRAFTING_MODEL = "llama-3.3-70b-versatile"
+_DRAFTING_MODEL = "openai/gpt-oss-20b"
 
 FileReaderFn = Callable[[str], str]
 
@@ -430,7 +430,7 @@ class TestGapAgent:
         if self._llm is not None:
             return self._llm
         try:
-            self._llm = LLMClient(model=_DRAFTING_MODEL)
+            self._llm = LLMClient()
         except LLMConfigError as exc:
             logger.warning("LLM not configured; skipping test drafts: %s", exc)
             return None

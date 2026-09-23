@@ -1,0 +1,10 @@
+{
+  "repo_full_name": "DhyanMehta/Code-Guardian",
+  "pr_number": 1,
+  "head_sha": "b9b96da0756e7b2be93ad24d4cbecaed27be45a9",
+  "head_repo_full_name": "DhyanMehta/Code-Guardian",
+  "base_branch": "master",
+  "branch": "e2e/bad-code-pr",
+  "file_path": "e2e_fixtures/app.py",
+  "html_url": "https://github.com/DhyanMehta/Code-Guardian/pull/1"
+}

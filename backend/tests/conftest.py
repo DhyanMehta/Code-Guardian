@@ -37,10 +37,17 @@ def _configure_env() -> None:
     """Set required environment before the app settings are first read."""
     os.environ["GITHUB_WEBHOOK_SECRET"] = TEST_WEBHOOK_SECRET
     os.environ["GITHUB_TOKEN"] = "fake-token-for-tests"
+    # Disable LLM call pacing under test: the throttle exists to protect a real
+    # provider's rate limit, and real-time sleeps would only slow the suite down.
+    os.environ["LLM_MIN_CALL_INTERVAL_SECONDS"] = "0"
 
     from backend.config import get_settings
 
     get_settings.cache_clear()
+
+    from backend.tools.llm_client import reset_throttle
+
+    reset_throttle()
 
 
 @pytest.fixture(autouse=True)

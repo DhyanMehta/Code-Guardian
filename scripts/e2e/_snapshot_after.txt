@@ -1,0 +1,129 @@
+=== tables ===
+  alembic_version
+  findings
+  review_agent_runs
+  reviews
+
+=== columns ===
+  alembic_version:
+    version_num                VARCHAR(32)                    nullable=False
+  findings:
+    id                         INTEGER                        nullable=False
+    review_id                  INTEGER                        nullable=False
+    agent                      VARCHAR(32)                    nullable=False
+    severity                   VARCHAR(16)                    nullable=False
+    title                      VARCHAR(512)                   nullable=False
+    detail                     TEXT                           nullable=True
+    file_path                  VARCHAR(1024)                  nullable=True
+    line                       INTEGER                        nullable=True
+    fix_data                   TEXT                           nullable=True
+  review_agent_runs:
+    id                         INTEGER                        nullable=False
+    review_id                  INTEGER                        nullable=False
+    agent                      VARCHAR(32)                    nullable=False
+    outcome                    VARCHAR(16)                    nullable=False
+    finding_count              INTEGER                        nullable=False
+    failure_reason             TEXT                           nullable=True
+    notes                      TEXT                           nullable=True
+    created_at                 TIMESTAMP                      nullable=False
+  reviews:
+    id                         INTEGER                        nullable=False
+    repo_full_name             VARCHAR(255)                   nullable=False
+    pr_number                  INTEGER                        nullable=False
+    commit_sha                 VARCHAR(64)                    nullable=True
+    status                     VARCHAR(32)                    nullable=False
+    summary                    TEXT                           nullable=True
+    created_at                 TIMESTAMP                      nullable=False
+    is_fork                    BOOLEAN                        nullable=False
+    autofix_status             VARCHAR(32)                    nullable=True
+    autofix_branch             VARCHAR(255)                   nullable=True
+    autofix_approved_by        VARCHAR(255)                   nullable=True
+    autofix_approved_at        TIMESTAMP                      nullable=True
+    completed_at               TIMESTAMP                      nullable=True
+    autofix_applied_count      INTEGER                        nullable=True
+    autofix_skipped_fixes      TEXT                           nullable=True
+
+=== indexes ===
+  findings.ix_findings_agent: cols=['agent'] unique=False
+  findings.ix_findings_review_id: cols=['review_id'] unique=False
+  findings.ix_findings_severity: cols=['severity'] unique=False
+  review_agent_runs.ix_review_agent_runs_agent: cols=['agent'] unique=False
+  review_agent_runs.ix_review_agent_runs_review_id: cols=['review_id'] unique=False
+  review_agent_runs.uq_agent_run_per_review: cols=['review_id', 'agent'] unique=True
+  reviews.ix_reviews_pr_number: cols=['pr_number'] unique=False
+  reviews.ix_reviews_repo_full_name: cols=['repo_full_name'] unique=False
+  reviews.ix_reviews_status: cols=['status'] unique=False
+  reviews.uq_one_running_review_per_pr: cols=['repo_full_name', 'pr_number'] unique=True
+
+=== alembic_version ===
+  c3d9e1f2a7b8
+
+=== reviews (all rows, ordered by id) ===
+  id=1 pr#1 status=completed  fork=False sha=b9b96da0
+      autofix=approved branch=codeguardian/autofix/1 by=DhyanMehta at=2026-07-26 21:29:39.441965+05:30
+      created=2026-07-26 20:56:44.342588+05:30
+      summary=15 findings (6 high, 4 medium, 5 low). 4/4 agents succeeded.
+  id=2 pr#1 status=completed  fork=False sha=b9b96da0
+      autofix=None branch=None by=None at=None
+      created=2026-07-26 21:30:16.354399+05:30
+      summary=15 findings (8 high, 4 medium, 3 low). 4/4 agents succeeded.
+  id=3 pr#1 status=skipped    fork=False sha=b9b96da0
+      autofix=None branch=None by=None at=None
+      created=2026-07-26 21:30:16.408226+05:30
+      summary=Another review is already running for this PR.
+  id=4 pr#1 status=completed  fork=True sha=b9b96da0
+      autofix=None branch=None by=None at=None
+      created=2026-07-26 21:31:11.569088+05:30
+      summary=15 findings (2 critical, 6 high, 4 medium, 3 low). 4/4 agents succeeded.
+  id=5 pr#1 status=completed  fork=False sha=b9b96da0
+      autofix=None branch=None by=None at=None
+      created=2026-07-27 00:47:00.272246+05:30
+      summary=35 findings (15 high, 12 medium, 8 low). 4/4 agents succeeded.
+  id=6 pr#1 status=completed  fork=False sha=b9b96da0
+      autofix=None branch=None by=None at=None
+      created=2026-07-27 00:50:12.496333+05:30
+      summary=15 findings (6 high, 4 medium, 5 low). 3/4 agents succeeded.
+  TOTAL reviews: 6
+
+=== findings per review ===
+  review=1 documentation  low      2
+  review=1 documentation  medium   2
+  review=1 security       high     3
+  review=1 security       low      2
+  review=1 security       medium   2
+  review=1 test_gap       high     3
+  review=1 test_gap       low      1
+  review=2 documentation  low      2
+  review=2 documentation  medium   2
+  review=2 security       high     5
+  review=2 security       medium   2
+  review=2 test_gap       high     3
+  review=2 test_gap       low      1
+  review=4 documentation  low      2
+  review=4 documentation  medium   2
+  review=4 security       critical 2
+  review=4 security       high     3
+  review=4 security       medium   2
+  review=4 test_gap       high     3
+  review=4 test_gap       low      1
+  review=5 documentation  low      2
+  review=5 documentation  medium   2
+  review=5 quality        high     9
+  review=5 quality        low      3
+  review=5 quality        medium   8
+  review=5 security       high     3
+  review=5 security       low      2
+  review=5 security       medium   2
+  review=5 test_gap       high     3
+  review=5 test_gap       low      1
+  review=6 documentation  low      2
+  review=6 documentation  medium   2
+  review=6 security       high     3
+  review=6 security       low      2
+  review=6 security       medium   2
+  review=6 test_gap       high     3
+  review=6 test_gap       low      1
+  TOTAL findings: 95
+
+=== findings checksum (id, agent, severity, title, file, line) ===
+  md5=1238731a9db9ae022ec9c925b2209572

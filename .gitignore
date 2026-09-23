@@ -1,6 +1,7 @@
 # Python virtual environment (standing rule: all Python work runs inside backend/venv)
 venv/
 .venv/
+backend/venv/
 
 # Secrets — never commit
 .env
@@ -27,3 +28,13 @@ Thumbs.db
 .idea/
 .vscode/
 .kiro
+
+backend/secrets/
+*.pem
+
+# Logs & temp artifacts
+*.log
+*.log.err
+*.zip
+gitleaks_temp/
+llm_debug_*.txt

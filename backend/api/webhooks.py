@@ -2,21 +2,29 @@
 
 Authenticates incoming webhook deliveries using GitHub's ``X-Hub-Signature-256``
 HMAC-SHA256 signature, validated against ``GITHUB_WEBHOOK_SECRET``. Invalid or missing
-signatures are rejected with 401. Valid ``pull_request`` ``opened``/``synchronize``
-events create a Review row and dispatch the review as a background task (202).
+signatures are rejected with 401.
+
+Session 8 extends the handler to branch on event type:
+- ``installation`` events create/update/deactivate Installation rows.
+- ``pull_request`` events resolve the installation from the payload, create a
+  scoped Review row, and dispatch the review in a background task (202).
+- All other event types are accepted (200) but ignored.
 """
 
 from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from backend.config import get_settings
 from backend.db.database import get_db
+from backend.db.models import Installation
 from backend.services.review_service import create_review, run_review
 
 logger = logging.getLogger(__name__)
@@ -24,6 +32,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 _REVIEWABLE_ACTIONS = {"opened", "synchronize", "reopened"}
+_INSTALLATION_ACTIONS = {"created", "deleted", "suspend", "unsuspend", "new_permissions_accepted"}
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _verify_signature(payload: bytes, signature_header: str | None, secret: str) -> bool:
@@ -33,6 +46,171 @@ def _verify_signature(payload: bytes, signature_header: str | None, secret: str)
     expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
     received = signature_header.split("=", 1)[1]
     return hmac.compare_digest(expected, received)
+
+
+# --------------------------------------------------------------------------- #
+# Installation event handling (Session 8)
+# --------------------------------------------------------------------------- #
+
+
+def _handle_installation_event(
+    event: dict, db: Session
+) -> dict[str, str | int]:
+    """Process an ``installation`` webhook event.
+
+    Actions: ``created``, ``deleted``, ``suspend``, ``unsuspend``,
+    ``new_permissions_accepted``.  Rows are soft-deleted (``uninstalled_at``)
+    rather than hard-deleted because reviews hold a FK reference.
+    """
+    action = event.get("action", "")
+    inst = event.get("installation", {})
+    installation_id = inst.get("id")
+    account = inst.get("account", {})
+
+    if not installation_id:
+        logger.warning("Installation event has no installation.id; ignoring.")
+        return {"status": "ignored", "reason": "missing installation.id"}
+
+    if action == "created":
+        db_inst = Installation(
+            id=installation_id,
+            account_login=account.get("login", ""),
+            account_type=account.get("type", "User"),
+            app_slug=inst.get("app_slug", ""),
+            target_type=inst.get("repository_selection", "selected"),
+            permissions=json.dumps(inst.get("permissions", {})),
+        )
+        db.merge(db_inst)
+        db.commit()
+        logger.info(
+            "Installation %d created for %s (%s).",
+            installation_id,
+            account.get("login", "?"),
+            account.get("type", "?"),
+        )
+
+    elif action == "deleted":
+        row = db.get(Installation, installation_id)
+        if row:
+            row.uninstalled_at = _utcnow()
+            db.commit()
+            logger.info("Installation %d soft-deleted.", installation_id)
+            # Evict cached auth so stale tokens aren't used.
+            from backend.tools.github_app import invalidate_installation
+            invalidate_installation(installation_id)
+        else:
+            logger.info(
+                "Installation %d deleted but not in DB; ignoring.",
+                installation_id,
+            )
+
+    elif action == "suspend":
+        row = db.get(Installation, installation_id)
+        if row:
+            row.suspended_at = _utcnow()
+            db.commit()
+            logger.info("Installation %d suspended.", installation_id)
+        else:
+            logger.info(
+                "Installation %d suspend event but not in DB; ignoring.",
+                installation_id,
+            )
+
+    elif action == "unsuspend":
+        row = db.get(Installation, installation_id)
+        if row:
+            row.suspended_at = None
+            db.commit()
+            logger.info("Installation %d unsuspended.", installation_id)
+        else:
+            logger.info(
+                "Installation %d unsuspend event but not in DB; ignoring.",
+                installation_id,
+            )
+
+    elif action == "new_permissions_accepted":
+        row = db.get(Installation, installation_id)
+        if row:
+            row.permissions = json.dumps(inst.get("permissions", {}))
+            row.updated_at = _utcnow()
+            db.commit()
+            logger.info("Installation %d permissions updated.", installation_id)
+
+    else:
+        logger.info(
+            "Installation event action '%s' not handled; ignoring.",
+            action,
+        )
+        return {"status": "ignored", "reason": f"unhandled installation action '{action}'"}
+
+    return {
+        "status": "processed",
+        "event": "installation",
+        "action": action,
+        "installation_id": installation_id,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Installation resolution for pull_request events
+# --------------------------------------------------------------------------- #
+
+
+def _resolve_installation(
+    event: dict, db: Session
+) -> int | None:
+    """Extract and validate ``installation.id`` from a webhook payload.
+
+    If the installation is not yet in the DB, auto-creates it (the ``created``
+    webhook may have been missed, e.g. the app was installed before this code
+    was deployed).
+
+    Returns ``None`` if the payload has no installation block (legacy PAT setup)
+    or if the installation is suspended/uninstalled.
+    """
+    inst_data = event.get("installation")
+    if not inst_data or not inst_data.get("id"):
+        return None
+
+    installation_id = inst_data["id"]
+    row = db.get(Installation, installation_id)
+
+    if row is None:
+        # Auto-create: the app was installed but we missed the installation event.
+        account = inst_data.get("account", {})
+        row = Installation(
+            id=installation_id,
+            account_login=account.get("login", ""),
+            account_type=account.get("type", "User"),
+        )
+        db.add(row)
+        db.commit()
+        logger.info(
+            "Auto-created installation %d for %s (missed 'created' event).",
+            installation_id,
+            account.get("login", "?"),
+        )
+
+    if row.uninstalled_at:
+        logger.warning(
+            "Ignoring PR event for uninstalled installation %d.",
+            installation_id,
+        )
+        return None
+
+    if row.suspended_at:
+        logger.warning(
+            "Ignoring PR event for suspended installation %d.",
+            installation_id,
+        )
+        return None
+
+    return installation_id
+
+
+# --------------------------------------------------------------------------- #
+# Main webhook endpoint
+# --------------------------------------------------------------------------- #
 
 
 @router.post("/github", status_code=status.HTTP_202_ACCEPTED)
@@ -46,8 +224,10 @@ async def github_webhook(
     """Receive a GitHub webhook delivery.
 
     - Rejects requests with a missing/invalid signature (401).
-    - Ignores non-``pull_request`` events (200, ignored).
-    - For reviewable PR actions, creates a Review and dispatches in background (202).
+    - Handles ``installation`` events (create/delete/suspend/unsuspend).
+    - For reviewable PR actions, resolves the installation, creates a Review,
+      and dispatches in background (202).
+    - All other events are accepted (200) but ignored.
     """
     settings = get_settings()
 
@@ -78,9 +258,20 @@ async def github_webhook(
             detail="Request body is not valid JSON.",
         ) from exc
 
+    # ----- Branch on event type -----
+
+    if x_github_event == "installation":
+        return _handle_installation_event(event, db)
+
+    if x_github_event == "installation_repositories":
+        logger.info("Webhook: installation_repositories event received; no action taken.")
+        return {"status": "ignored", "reason": "installation_repositories not handled"}
+
     if x_github_event != "pull_request":
         logger.info("Webhook ignored: event type '%s' is not handled.", x_github_event)
         return {"status": "ignored", "reason": f"unhandled event '{x_github_event}'"}
+
+    # ----- pull_request event -----
 
     action = event.get("action")
     if action not in _REVIEWABLE_ACTIONS:
@@ -96,32 +287,46 @@ async def github_webhook(
     head_repo = pr.get("head", {}).get("repo", {}).get("full_name", "")
     is_fork = head_repo != "" and head_repo != repo_full_name
 
+    # Resolve the installation from the payload (Session 8).
+    installation_id = _resolve_installation(event, db)
+
+    if installation_id is None and event.get("installation"):
+        # The payload had an installation block but it resolved to None
+        # (suspended or uninstalled). Reject without creating a review.
+        return {
+            "status": "rejected",
+            "reason": "installation is suspended or removed",
+        }
+
     review = create_review(
         db,
         repo_full_name=repo_full_name,
         pr_number=pr_number,
         head_sha=head_sha,
         is_fork=is_fork,
+        installation_id=installation_id,
     )
 
     from backend.db.database import get_sessionmaker
     session_factory = get_sessionmaker()
 
-    def _background_review(review_id: int) -> None:
+    def _background_review(review_id: int, inst_id: int | None) -> None:
         session = session_factory()
         try:
-            run_review(session, review_id)
+            run_review(session, review_id, installation_id=inst_id)
         finally:
             session.close()
 
-    background_tasks.add_task(_background_review, review.id)
+    background_tasks.add_task(_background_review, review.id, installation_id)
 
     logger.info(
-        "Accepted pull_request '%s' for %s#%d (review_id=%d). Dispatching background review.",
+        "Accepted pull_request '%s' for %s#%d (review_id=%d, installation_id=%s). "
+        "Dispatching background review.",
         action,
         repo_full_name,
         pr_number,
         review.id,
+        installation_id,
     )
     return {
         "status": "accepted",

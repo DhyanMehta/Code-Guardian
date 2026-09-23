@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from backend.agents.state import (
+    AgentOutcome,
     PRMetadata,
     ReviewState,
     TriagedFinding,
@@ -73,6 +74,12 @@ def _state_with_all_agents() -> ReviewState:
             "test_gap": ["2 gaps found"],
             "documentation": ["1 docstring missing"],
         },
+        "agent_outcomes": {
+            "security": AgentOutcome.OK.value,
+            "quality": AgentOutcome.OK.value,
+            "test_gap": AgentOutcome.OK.value,
+            "documentation": AgentOutcome.OK.value,
+        },
         "quality_result": {
             "quality": {
                 "findings": [
@@ -84,9 +91,12 @@ def _state_with_all_agents() -> ReviewState:
                         "severity": "medium",
                         "cited_passage": "Functions must not exceed 50 lines",
                         "source_file": "standards.md",
+                        "symbol": "long_helper",
                     }
                 ],
                 "notes": ["1 finding"],
+                "outcome": AgentOutcome.OK.value,
+                "failure_reason": None,
             }
         },
         "test_gap_result": {
@@ -168,6 +178,14 @@ def _state_with_all_agents() -> ReviewState:
     }
 
 
+def _quality_row(md: str) -> str:
+    """The Agent Status table row for the Quality agent."""
+    return next(
+        line for line in md.splitlines()
+        if line.startswith("| Quality ")
+    )
+
+
 class TestAggregation:
     def test_all_agents_produce_findings(self):
         state = _state_with_all_agents()
@@ -243,13 +261,17 @@ class TestAggregation:
 
     def test_failed_agent_status(self):
         state = _state_with_all_agents()
+        state["agent_outcomes"]["quality"] = AgentOutcome.FAILED.value
         state["agent_notes"]["quality"] = ["Agent failed: ChromaDB unreachable"]
         state["quality_result"]["quality"]["findings"] = []
+        state["quality_result"]["quality"]["outcome"] = AgentOutcome.FAILED.value
+        state["quality_result"]["quality"]["failure_reason"] = "ChromaDB unreachable"
         report = aggregate(state)
 
         qual_status = next(s for s in report.agent_statuses if s.name == "quality")
+        assert qual_status.outcome is AgentOutcome.FAILED
         assert qual_status.succeeded is False
-        assert "Agent failed" in qual_status.error_message
+        assert "ChromaDB unreachable" in qual_status.error_message
 
     def test_empty_state_no_findings(self):
         state: ReviewState = {
@@ -289,6 +311,120 @@ class TestAggregation:
         doc_findings = [f for f in report.findings if f.agent == "documentation"]
         # "missing" → MEDIUM
         assert doc_findings[0].severity == Severity.MEDIUM
+
+
+# --------------------------------------------------------------------------- #
+# Agent status accuracy
+#
+# "0 findings" is ambiguous: clean for an agent that ran, unknown for one that
+# could not. The status must come from the structured outcome, never from note
+# text, which is written for humans and will be rephrased.
+# --------------------------------------------------------------------------- #
+
+
+class TestAgentStatusAccuracy:
+    def test_degraded_agent_is_not_reported_as_succeeded(self):
+        state = _state_with_all_agents()
+        state["agent_outcomes"]["quality"] = AgentOutcome.DEGRADED.value
+        state["quality_result"]["quality"]["findings"] = []
+        state["quality_result"]["quality"]["outcome"] = AgentOutcome.DEGRADED.value
+        state["quality_result"]["quality"]["failure_reason"] = (
+            "No coding-standards context retrieved: collection missing"
+        )
+        report = aggregate(state)
+
+        qual = next(s for s in report.agent_statuses if s.name == "quality")
+        assert qual.outcome is AgentOutcome.DEGRADED
+        assert qual.succeeded is False
+        assert "collection missing" in qual.error_message
+
+    def test_degraded_agent_never_renders_a_check_mark(self):
+        state = _state_with_all_agents()
+        state["agent_outcomes"]["quality"] = AgentOutcome.DEGRADED.value
+        state["quality_result"]["quality"]["findings"] = []
+        state["quality_result"]["quality"]["outcome"] = AgentOutcome.DEGRADED.value
+        state["quality_result"]["quality"]["failure_reason"] = "ChromaDB unreachable"
+        md = format_pr_comment(aggregate(state), pr_number=99)
+
+        row = _quality_row(md)
+        assert "\u2705" not in row  # no check mark
+        assert "\u26a0" in row  # warning sign
+        assert "could not run" in row
+        assert "ChromaDB unreachable" in row
+        # A count of 0 would read as "clean"; it must not be shown as a number.
+        assert "| 0 |" not in row
+
+    def test_failed_agent_never_renders_a_check_mark(self):
+        state = _state_with_all_agents()
+        state["agent_outcomes"]["quality"] = AgentOutcome.FAILED.value
+        state["quality_result"]["quality"]["findings"] = []
+        state["quality_result"]["quality"]["outcome"] = AgentOutcome.FAILED.value
+        md = format_pr_comment(aggregate(state), pr_number=99)
+
+        row = _quality_row(md)
+        assert "\u2705" not in row
+        assert "\u274c" in row
+        assert "failed" in row
+
+    def test_agent_that_ran_clean_shows_check_mark_and_zero(self):
+        state = _state_with_all_agents()
+        state["quality_result"]["quality"]["findings"] = []
+        md = format_pr_comment(aggregate(state), pr_number=99)
+
+        row = _quality_row(md)
+        assert "\u2705" in row
+        assert "| 0 |" in row
+        assert "could not run" not in row
+
+    def test_note_wording_alone_does_not_mark_an_agent_failed(self):
+        """Status is structural: rephrasing a note must not change the outcome."""
+        state = _state_with_all_agents()
+        state["agent_notes"]["quality"] = ["Agent failed: totally different wording"]
+        report = aggregate(state)
+
+        qual = next(s for s in report.agent_statuses if s.name == "quality")
+        assert qual.outcome is AgentOutcome.OK
+        assert qual.succeeded is True
+
+    def test_status_line_distinguishes_degraded_from_failed(self):
+        state = _state_with_all_agents()
+        state["agent_outcomes"]["quality"] = AgentOutcome.DEGRADED.value
+        state["quality_result"]["quality"]["outcome"] = AgentOutcome.DEGRADED.value
+        state["agent_outcomes"]["test_gap"] = AgentOutcome.FAILED.value
+        md = format_pr_comment(aggregate(state), pr_number=99)
+
+        assert "2/4 agents succeeded" in md
+        assert "1 could not run" in md
+        assert "1 failed" in md
+
+    def test_incomplete_review_is_called_out_next_to_the_counts(self):
+        state = _state_with_all_agents()
+        state["agent_outcomes"]["quality"] = AgentOutcome.DEGRADED.value
+        state["quality_result"]["quality"]["outcome"] = AgentOutcome.DEGRADED.value
+        md = format_pr_comment(aggregate(state), pr_number=99)
+
+        assert "Incomplete review" in md
+        assert "Quality" in md
+
+    def test_all_ok_has_no_incomplete_banner(self):
+        state = _state_with_all_agents()
+        md = format_pr_comment(aggregate(state), pr_number=99)
+        assert "Incomplete review" not in md
+
+    def test_security_degraded_when_every_scanner_failed(self):
+        state = _state_with_all_agents()
+        state["agent_outcomes"]["security"] = AgentOutcome.DEGRADED.value
+        state["triaged_findings"]["security"] = []
+        state["scanner_statuses"]["security"] = [
+            ScannerStatus(scanner="semgrep", ok=False, error="x", error_type="E"),
+            ScannerStatus(scanner="bandit", ok=False, error="x", error_type="E"),
+            ScannerStatus(scanner="gitleaks", ok=False, error="x", error_type="E"),
+        ]
+        md = format_pr_comment(aggregate(state), pr_number=99)
+
+        row = next(l for l in md.splitlines() if l.startswith("| Security "))
+        assert "\u2705" not in row
+        assert "\u26a0" in row
 
 
 class TestFormatPRComment:
@@ -356,11 +492,12 @@ class TestFormatPRComment:
 
     def test_partial_failure_shows_in_status(self):
         state = _state_with_all_agents()
+        state["agent_outcomes"]["security"] = AgentOutcome.FAILED.value
         state["agent_notes"]["security"] = ["Agent failed: semgrep not installed"]
         state["triaged_findings"]["security"] = []
         report = aggregate(state)
         md = format_pr_comment(report, pr_number=99)
-        assert "❌" in md
+        assert "\u274c" in md
 
     def test_summary_counts_by_severity(self):
         state = _state_with_all_agents()

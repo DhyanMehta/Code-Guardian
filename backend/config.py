@@ -21,7 +21,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # precedence; a value in a later file overrides an earlier one.
 _BACKEND_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _BACKEND_DIR.parent
-_ENV_FILES = (_PROJECT_ROOT / ".env", _BACKEND_DIR / ".env")
+_ENV_FILES = (_PROJECT_ROOT / ".env",)
 
 
 class Settings(BaseSettings):
@@ -36,20 +36,58 @@ class Settings(BaseSettings):
 
     # Secrets (empty by default; validated where used).
     groq_api_key: str = ""
-    github_token: str = ""
+    github_token: str = ""  # Legacy PAT — kept for backward compat during App migration.
     github_webhook_secret: str = ""
 
-    # LLM configuration (Groq). Model must be a currently-supported Groq model id;
+    # GitHub App (replaces the single PAT for all API calls).
+    github_app_id: int = 0
+    github_app_private_key_path: str = ""
+    github_app_client_id: str = ""
+    github_app_client_secret: str = ""
+
+    # Dashboard session JWTs (HS256).
+    session_secret: str = ""
+
+    # LLM configuration. Default to gemini provider.
+    llm_provider: str = "groq"
+
+    # Gemini configuration.
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.5-flash-lite"
+
+    # Groq configuration (fallback provider). Model must be a currently-supported Groq model id;
     # verify against Groq's model catalogue if changed.
-    groq_model: str = "llama-3.1-8b-instant"
+    groq_model: str = "openai/gpt-oss-20b"
     groq_timeout_seconds: int = 30
     groq_max_retries: int = 3
+
+    # LLM call pacing. The supervisor fans out to four agents in parallel, so
+    # without throttling they hit Groq simultaneously and blow the free tier's
+    # tokens-per-minute cap (observed: the Security Agent's triage lost the race,
+    # exhausted its retries on 429, and reported zero findings). These throttle the
+    # *calls*, not the agent scheduling — the graph still runs nodes in parallel.
+    llm_max_concurrent_calls: int = 1
+    llm_min_call_interval_seconds: float = 1.5
 
     # Infrastructure.
     database_url: str = (
         "postgresql+psycopg2://guardian:guardian@localhost:5432/codeguardian"
     )
     chroma_persist_dir: str = "./chroma_db"
+
+    # Dashboard. Comma-separated origins allowed to call the API from a browser.
+    # Typed as a plain string, not list[str], because pydantic-settings would then
+    # try to JSON-decode the env value and require `["http://..."]` in .env.
+    # Never widened to "*": these endpoints create branches and record approvals.
+    cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    def cors_origins(self) -> list[str]:
+        """Parse ``cors_allowed_origins`` into a list of origins."""
+        return [
+            origin.strip()
+            for origin in self.cors_allowed_origins.split(",")
+            if origin.strip()
+        ]
 
     def require(self, field_name: str) -> str:
         """Return a required setting's value or raise if it is unset/empty.

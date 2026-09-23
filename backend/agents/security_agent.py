@@ -10,14 +10,31 @@ scanner output. Hard rules enforced here (see ``RULES.md`` #5, #6, #9):
 * If a scanner fails, the agent still returns the results of the scanners that
   succeeded, clearly marking which failed and why. One broken tool never fails the
   whole review.
+
+The scanners themselves are directory-oriented and always cover the whole workspace.
+Their raw findings are then narrowed to the diff hunks of the PR under review:
+without that, reviewing a PR against any repository that already contains code
+reports the entire pre-existing backlog as though this PR had introduced it. Findings
+outside the diff are simply out of scope for this review — they are not errors, and
+they never fail the run.
+
+Scanner paths are also normalized to workspace-relative form as soon as they arrive.
+Bandit and Semgrep echo back the absolute path they were handed, which is a
+throwaway temp checkout directory; left alone it is persisted to the database and
+published in a public PR comment, where it is both meaningless to readers and a
+needless disclosure of the review host's filesystem layout.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Callable
+from dataclasses import replace
+from pathlib import Path
 
+from backend.agents._diff_utils import function_overlaps_diff, parse_diff_hunks
 from backend.agents.state import (
     ScannerStatus,
     SecurityAgentResult,
@@ -73,9 +90,17 @@ class SecurityAgent:
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
-    def run(self, workspace_path: str) -> SecurityAgentResult:
-        """Scan ``workspace_path`` and return a triaged, typed result."""
+    def run(self, workspace_path: str, diff: str = "") -> SecurityAgentResult:
+        """Scan ``workspace_path`` and return a triaged, typed result.
+
+        Args:
+            workspace_path: Root of the PR checkout, handed to every scanner as-is.
+            diff: Unified diff for the PR. When supplied, raw findings are narrowed
+                to the diff's hunks so only issues this PR actually touched are
+                reported. When empty, no narrowing is applied.
+        """
         result = SecurityAgentResult()
+        hunks_by_file = self._parse_scope(diff)
 
         # 1. Run every scanner, tolerating individual failures.
         for scanner, runner in self._runners.items():
@@ -92,6 +117,17 @@ class SecurityAgent:
                     )
                 )
                 continue
+
+            # 2. Normalize paths before anything downstream sees, stores, or
+            #    publishes them.
+            findings = self._normalize_finding_paths(findings, workspace_path)
+
+            # 3. Narrow to the PR's diff hunks.
+            if hunks_by_file is not None:
+                findings = self._scope_to_diff(
+                    scanner, findings, workspace_path, hunks_by_file
+                )
+
             result.raw_findings.extend(findings)
             result.scanner_statuses.append(
                 ScannerStatus(scanner=scanner, ok=True, finding_count=len(findings))
@@ -102,15 +138,134 @@ class SecurityAgent:
                 "Scanner(s) failed and were skipped: "
                 + ", ".join(result.failed_scanners)
             )
+            if len(result.failed_scanners) > len(result.succeeded_scanners):
+                result.mark_degraded(
+                    f"{len(result.failed_scanners)}/{len(self._runners)} scanners "
+                    f"failed ({', '.join(result.failed_scanners)}); security coverage "
+                    f"is incomplete."
+                )
 
-        # 2. Nothing to triage -> return raw results (no LLM call).
+        # 4. Nothing to triage -> return raw results (no LLM call).
         if not result.raw_findings:
             result.notes.append("No raw findings; LLM triage skipped.")
             return result
 
-        # 3. Triage the raw findings with the LLM (never fail the review on error).
+        # 5. Triage the raw findings with the LLM (never fail the review on error).
         self._triage(result)
         return result
+
+    # ------------------------------------------------------------------ #
+    # Path normalization
+    # ------------------------------------------------------------------ #
+    @classmethod
+    def _normalize_finding_paths(
+        cls,
+        findings: list[RawFinding],
+        workspace_path: str,
+    ) -> list[RawFinding]:
+        """Rewrite every finding's path to workspace-relative POSIX form.
+
+        Only the path changes; the finding is otherwise the scanner's verbatim
+        output. The fingerprint is recomputed because it is derived from the path,
+        and this runs before triage so the fingerprints the LLM sees stay
+        self-consistent.
+        """
+        normalized: list[RawFinding] = []
+        for finding in findings:
+            rel_path = cls._workspace_relative(finding.file_path, workspace_path)
+            if rel_path == finding.file_path:
+                normalized.append(finding)
+                continue
+            normalized.append(
+                replace(finding, file_path=rel_path, fingerprint="")
+            )
+        return normalized
+
+    # ------------------------------------------------------------------ #
+    # Diff scoping
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _parse_scope(diff: str) -> dict[str, list[tuple[int, int]]] | None:
+        """Parse ``diff`` into per-file hunk ranges, or ``None`` for no scoping.
+
+        ``None`` means "report everything the scanners found". That is deliberate for
+        a missing or unparseable diff: an empty scope would silently suppress every
+        finding, whereas an unscoped result is noisy but never hides a real issue.
+        """
+        if not diff.strip():
+            logger.warning(
+                "No diff supplied to the Security Agent; findings will not be "
+                "narrowed to the PR and may include pre-existing repository issues."
+            )
+            return None
+
+        hunks = parse_diff_hunks(diff)
+        if not hunks:
+            logger.warning(
+                "Diff supplied but no hunks could be parsed; skipping diff scoping."
+            )
+            return None
+        return hunks
+
+    @classmethod
+    def _scope_to_diff(
+        cls,
+        scanner: str,
+        findings: list[RawFinding],
+        workspace_path: str,
+        hunks_by_file: dict[str, list[tuple[int, int]]],
+    ) -> list[RawFinding]:
+        """Keep only the findings that land inside the PR's changed hunks.
+
+        Findings are filtered, never rewritten or synthesised, so everything that
+        survives is still verbatim scanner output (``RULES.md`` #5).
+        """
+        in_scope: list[RawFinding] = []
+        for finding in findings:
+            rel_path = cls._workspace_relative(finding.file_path, workspace_path)
+            hunks = hunks_by_file.get(rel_path) if rel_path else None
+            if not hunks:
+                continue
+            # A finding occupies a single line; reuse the shared overlap check by
+            # treating it as a one-line range.
+            if finding.line is None or function_overlaps_diff(
+                finding.line, finding.line, hunks
+            ):
+                in_scope.append(finding)
+
+        excluded = len(findings) - len(in_scope)
+        if excluded:
+            logger.info(
+                "Scanner '%s': %d finding(s) fall outside this PR's diff and are out "
+                "of scope for this review; %d retained.",
+                scanner,
+                excluded,
+                len(in_scope),
+            )
+        return in_scope
+
+    @staticmethod
+    def _workspace_relative(file_path: str | None, workspace_path: str) -> str | None:
+        """Normalize a scanner path to workspace-relative POSIX form.
+
+        Scanners disagree on path shape: Bandit and Semgrep echo back the absolute
+        path they were handed, while Gitleaks-in-Docker reports paths relative to its
+        bind mount. Diff headers are always repo-relative, so both are converted to
+        that form. Already-relative paths pass through unchanged, making this safe to
+        apply more than once.
+        """
+        if not file_path:
+            return None
+
+        candidate = Path(file_path)
+        if candidate.is_absolute() and workspace_path:
+            try:
+                candidate = Path(os.path.relpath(str(candidate), workspace_path))
+            except (ValueError, OSError):
+                # Different drive or an otherwise unusable path — use the raw value.
+                pass
+
+        return candidate.as_posix().lstrip("./")
 
     # ------------------------------------------------------------------ #
     # Internals
@@ -128,7 +283,11 @@ class SecurityAgent:
     def _triage(self, result: SecurityAgentResult) -> None:
         llm = self._get_llm()
         if llm is None:
-            result.notes.append("LLM triage skipped: client not configured.")
+            result.mark_degraded("LLM client is not configured; findings untriaged.")
+            result.notes.append(
+                "LLM triage skipped: client not configured. "
+                f"{self._untriaged_note(result)}"
+            )
             return
 
         by_fingerprint = {f.fingerprint: f for f in result.raw_findings}
@@ -142,14 +301,25 @@ class SecurityAgent:
             )
         except LLMError as exc:
             logger.warning("LLM triage failed: %s", exc)
-            result.notes.append(f"LLM triage failed ({type(exc).__name__}); "
-                                "returning raw findings only.")
+            result.mark_degraded(
+                f"LLM triage failed ({type(exc).__name__}); "
+                f"{len(result.raw_findings)} scanner finding(s) left untriaged."
+            )
+            result.notes.append(
+                f"LLM triage failed ({type(exc).__name__}); "
+                f"{self._untriaged_note(result)}"
+            )
             return
 
         parsed = self._parse_llm_findings(raw_response)
         if parsed is None:
+            result.mark_degraded(
+                "LLM triage response was not usable JSON; "
+                f"{len(result.raw_findings)} scanner finding(s) left untriaged."
+            )
             result.notes.append(
-                "LLM triage response could not be parsed; raw findings only."
+                "LLM triage response could not be parsed; "
+                f"{self._untriaged_note(result)}"
             )
             return
 
@@ -185,6 +355,25 @@ class SecurityAgent:
                 f"Dropped {dropped} unverifiable LLM finding(s) not present in raw "
                 "scanner output."
             )
+
+    @staticmethod
+    def _untriaged_note(result: SecurityAgentResult) -> str:
+        """Describe the raw findings that exist but are not being reported.
+
+        They stay in ``raw_findings`` as context and are deliberately *not* promoted
+        to reported findings: they never went through triage, so they carry no
+        explanation or reviewed severity. Surfacing them as findings anyway is a
+        separate, larger change (see CONTEXT.md known limitations).
+        """
+        count = len(result.raw_findings)
+        if not count:
+            return "no raw scanner findings to report."
+        scanners = sorted({f.scanner for f in result.raw_findings})
+        return (
+            f"{count} raw scanner finding(s) from {', '.join(scanners)} are available "
+            "as context but are NOT reported as findings because they were never "
+            "triaged. This review does not cover security."
+        )
 
     @staticmethod
     def _coerce_priority(value: object) -> int:
@@ -223,6 +412,6 @@ class SecurityAgent:
         return None
 
 
-def run_security_agent(workspace_path: str) -> SecurityAgentResult:
+def run_security_agent(workspace_path: str, diff: str = "") -> SecurityAgentResult:
     """Convenience entry point using default (real) runners + LLM client."""
-    return SecurityAgent().run(workspace_path)
+    return SecurityAgent().run(workspace_path, diff)

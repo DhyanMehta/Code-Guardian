@@ -8,9 +8,12 @@ subclass on failure. Nothing is ever swallowed silently (see ``RULES.md`` #9).
 from __future__ import annotations
 
 import hashlib
+import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 
 
 class Severity(str, Enum):
@@ -143,6 +146,26 @@ class ProcessOutput:
     stderr: str
 
 
+def _resolve_executable(name: str) -> str:
+    """Resolve a scanner executable, preferring the active venv's Scripts dir.
+
+    On Windows, subprocess.run won't find executables in the venv unless the full
+    path is given or the venv is activated in the shell environment. This resolves
+    pip-installed tools (bandit, semgrep) from the same interpreter prefix.
+    """
+    if Path(name).is_absolute():
+        return name
+    if shutil.which(name):
+        return name
+    # Look in the same Scripts/bin directory as the running Python
+    scripts_dir = Path(sys.executable).parent
+    for suffix in ("", ".exe"):
+        candidate = scripts_dir / f"{name}{suffix}"
+        if candidate.exists():
+            return str(candidate)
+    return name
+
+
 def run_process(
     scanner: str,
     command: list[str],
@@ -157,6 +180,8 @@ def run_process(
         ScannerTimeoutError: the process exceeded ``timeout`` seconds.
         ScannerExecutionError: the process could not be executed (OS error).
     """
+    command = list(command)
+    command[0] = _resolve_executable(command[0])
     try:
         completed = subprocess.run(  # noqa: S603 - command is built internally
             command,

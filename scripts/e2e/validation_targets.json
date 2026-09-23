@@ -1,0 +1,29 @@
+[
+  {
+    "label": "python-dotenv (clean, false-positive test)",
+    "repo_full_name": "DhyanMehta/python-dotenv",
+    "pr_number": 1,
+    "head_sha": "220c2e060790c35735a71f19b8a79f2eb85ac0e6",
+    "branch": "feature/typed-env-utils",
+    "base_branch": "main",
+    "html_url": "https://github.com/DhyanMehta/python-dotenv/pull/1"
+  },
+  {
+    "label": "httpx (medium, clone + scoping test)",
+    "repo_full_name": "DhyanMehta/httpx",
+    "pr_number": 1,
+    "head_sha": "5b2630b1d2b7442718dea99c443513677afc06dd",
+    "branch": "feature/retry-helper",
+    "base_branch": "master",
+    "html_url": "https://github.com/DhyanMehta/httpx/pull/1"
+  },
+  {
+    "label": "flask-task-api (imperfect, true-positive test)",
+    "repo_full_name": "DhyanMehta/flask-task-api",
+    "pr_number": 1,
+    "head_sha": "1293405c8eb783fb3ce9c4e4407c4d1f22c4fdf4",
+    "branch": "feature/task-crud",
+    "base_branch": "main",
+    "html_url": "https://github.com/DhyanMehta/flask-task-api/pull/1"
+  }
+]

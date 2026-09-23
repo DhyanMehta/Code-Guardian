@@ -1,0 +1,13 @@
+# Verification-only tooling for the Session 6 design-system checks.
+#
+# Deliberately NOT in backend/requirements.txt: none of this is imported by the
+# application. It exists so the dashboard's contrast, grayscale, colour-vision,
+# keyboard-navigation, and polling behaviour can be measured in a real browser
+# instead of asserted. Install into backend/venv (RULES.md #3):
+#
+#   backend\venv\Scripts\python.exe -m pip install -r scripts\e2e\requirements-verify.txt
+#
+# Playwright drives the already-installed system Chrome via channel="chrome", so no
+# browser download is required.
+playwright==1.61.0
+pillow==12.1.0

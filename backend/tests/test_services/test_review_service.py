@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from backend.agents.state import AgentOutcome
 from backend.db.models import Base, Finding, Review
 from backend.services.review_service import (
     STALE_REVIEW_THRESHOLD_MINUTES,
@@ -60,6 +61,80 @@ class TestCreateReview:
             is_fork=True,
         )
         assert review.is_fork is True
+
+    def test_creates_review_with_installation_id(self, db_session):
+        review = create_review(
+            db_session,
+            repo_full_name="owner/repo",
+            pr_number=10,
+            head_sha="def456",
+            installation_id=123456,
+        )
+        assert review.installation_id == 123456
+
+
+class TestRunReviewAndPostCommentAuth:
+    def test_run_review_resolves_installation_token(self, db_session):
+        review = create_review(
+            db_session,
+            repo_full_name="owner/repo",
+            pr_number=15,
+            head_sha="sha123",
+            installation_id=987654,
+        )
+
+        with patch("backend.tools.github_app.get_installation_token", return_value="inst-token-xyz") as mock_token, \
+             patch("backend.services.review_service.checkout_pr") as mock_checkout, \
+             patch("backend.services.review_service._execute_graph_and_persist") as mock_exec:
+            mock_checkout.return_value.__enter__.return_value.path = "/fake/path"
+
+            run_review(db_session, review.id, installation_id=987654)
+
+            mock_token.assert_called_once_with(987654)
+            mock_checkout.assert_called_once_with("owner/repo", "sha123", "inst-token-xyz")
+            mock_exec.assert_called_once()
+
+    def test_run_review_falls_back_to_pat_token(self, db_session):
+        review = create_review(
+            db_session,
+            repo_full_name="owner/repo",
+            pr_number=16,
+            head_sha="sha456",
+        )
+
+        with patch("backend.services.review_service.checkout_pr") as mock_checkout, \
+             patch("backend.services.review_service._execute_graph_and_persist") as mock_exec:
+            mock_checkout.return_value.__enter__.return_value.path = "/fake/path"
+
+            run_review(db_session, review.id, installation_id=None)
+
+            mock_checkout.assert_called_once_with("owner/repo", "sha456", "fake-token-for-tests")
+            mock_exec.assert_called_once()
+
+    def test_post_pr_comment_uses_installation_github(self, db_session):
+        from backend.services.review_service import _post_pr_comment
+
+        review = create_review(
+            db_session,
+            repo_full_name="owner/repo",
+            pr_number=20,
+            head_sha="sha789",
+            installation_id=112233,
+        )
+
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_pr = MagicMock()
+        mock_gh.get_repo.return_value = mock_repo
+        mock_repo.get_pull.return_value = mock_pr
+
+        with patch("backend.tools.github_app.get_installation_github", return_value=mock_gh) as mock_get_gh:
+            _post_pr_comment(review, "## Comment", installation_id=112233)
+            mock_get_gh.assert_called_once_with(112233)
+            mock_gh.get_repo.assert_called_once_with("owner/repo")
+            mock_repo.get_pull.assert_called_once_with(20)
+            mock_pr.create_issue_comment.assert_called_once_with("## Comment")
+
 
 
 class TestStartReview:
@@ -177,15 +252,33 @@ class TestBuildSummary:
                 UnifiedFinding(agent="quality", severity=Severity.MEDIUM, title="c", detail=""),
             ],
             agent_statuses=[
-                AgentStatus(name="security", succeeded=True),
-                AgentStatus(name="quality", succeeded=True),
-                AgentStatus(name="test_gap", succeeded=False),
-                AgentStatus(name="documentation", succeeded=True),
+                AgentStatus(name="security", outcome=AgentOutcome.OK),
+                AgentStatus(name="quality", outcome=AgentOutcome.OK),
+                AgentStatus(name="test_gap", outcome=AgentOutcome.FAILED),
+                AgentStatus(name="documentation", outcome=AgentOutcome.OK),
             ],
         )
         summary = _build_summary(report)
         assert "3 findings" in summary
         assert "3/4 agents succeeded" in summary
+
+    def test_degraded_agent_does_not_count_as_succeeded(self):
+        """A degraded agent produced no signal; it must not inflate the success count."""
+        report = AggregatedReport(
+            findings=[],
+            agent_statuses=[
+                AgentStatus(name="security", outcome=AgentOutcome.OK),
+                AgentStatus(name="quality", outcome=AgentOutcome.DEGRADED),
+                AgentStatus(name="test_gap", outcome=AgentOutcome.OK),
+                AgentStatus(name="documentation", outcome=AgentOutcome.OK),
+            ],
+        )
+        assert _build_summary(report) == "No issues found."
+
+        report.findings.append(
+            UnifiedFinding(agent="security", severity=Severity.HIGH, title="a", detail="")
+        )
+        assert "3/4 agents succeeded" in _build_summary(report)
 
 
 class TestSweepStaleReviews:
@@ -371,3 +464,164 @@ class TestReviewStateTransitions:
 
         db_session.refresh(review)
         assert review.status == "failed"
+
+
+class TestPersistAgentRuns:
+    """Per-agent outcomes must be persisted, not left in ephemeral graph state.
+
+    Regression coverage for the Session 6 fidelity bug: with nothing stored, the
+    report endpoint rebuilt statuses from which agents happened to have findings,
+    which dropped zero-finding agents and reported everything else as successful.
+    """
+
+    def _state(self, outcomes: dict[str, str], notes: dict[str, list[str]] | None = None):
+        return {
+            "agent_outcomes": outcomes,
+            "agent_notes": notes or {},
+        }
+
+    def test_persists_one_row_per_agent_including_zero_finding_agents(self, db_session):
+        from backend.agents.state import AgentOutcome
+        from backend.agents.supervisor import AGENT_NAMES
+        from backend.db.models import ReviewAgentRun
+        from backend.services.report_builder import AgentStatus
+        from backend.services.review_service import _persist_agent_runs
+
+        review = create_review(
+            db_session, repo_full_name="o/r", pr_number=1, head_sha="s"
+        )
+        report = AggregatedReport(
+            findings=[
+                UnifiedFinding(agent="security", severity=Severity.HIGH,
+                               title="a", detail=""),
+            ],
+            agent_statuses=[
+                AgentStatus(name="security", outcome=AgentOutcome.OK, finding_count=1),
+                AgentStatus(name="quality", outcome=AgentOutcome.OK, finding_count=0),
+                AgentStatus(name="test_gap", outcome=AgentOutcome.OK, finding_count=0),
+                AgentStatus(name="documentation", outcome=AgentOutcome.OK,
+                            finding_count=0),
+            ],
+        )
+        state = self._state({name: "ok" for name in AGENT_NAMES})
+
+        _persist_agent_runs(db_session, review, state, report)
+
+        rows = db_session.query(ReviewAgentRun).filter_by(review_id=review.id).all()
+        assert {r.agent for r in rows} == set(AGENT_NAMES)
+        assert all(r.outcome == "ok" for r in rows)
+
+    def test_persists_degraded_outcome_with_reason_and_notes(self, db_session):
+        from backend.agents.state import AgentOutcome
+        from backend.db.models import ReviewAgentRun
+        from backend.services.report_builder import AgentStatus
+        from backend.services.review_service import _persist_agent_runs
+
+        review = create_review(
+            db_session, repo_full_name="o/r", pr_number=2, head_sha="s"
+        )
+        report = AggregatedReport(
+            findings=[],
+            agent_statuses=[
+                AgentStatus(name="security", outcome=AgentOutcome.OK, finding_count=0),
+                AgentStatus(name="quality", outcome=AgentOutcome.DEGRADED,
+                            finding_count=0,
+                            error_message="No coding-standards context retrieved"),
+                AgentStatus(name="test_gap", outcome=AgentOutcome.OK, finding_count=0),
+                AgentStatus(name="documentation", outcome=AgentOutcome.OK,
+                            finding_count=0),
+            ],
+        )
+        state = self._state(
+            {"security": "ok", "quality": "degraded", "test_gap": "ok",
+             "documentation": "ok"},
+            {"quality": ["No relevant coding-standards passages retrieved."]},
+        )
+
+        _persist_agent_runs(db_session, review, state, report)
+
+        quality = (
+            db_session.query(ReviewAgentRun)
+            .filter_by(review_id=review.id, agent="quality")
+            .one()
+        )
+        assert quality.outcome == "degraded"
+        assert "No coding-standards context" in quality.failure_reason
+        assert json.loads(quality.notes) == [
+            "No relevant coding-standards passages retrieved."
+        ]
+
+        # A successful agent carries no failure reason.
+        security = (
+            db_session.query(ReviewAgentRun)
+            .filter_by(review_id=review.id, agent="security")
+            .one()
+        )
+        assert security.failure_reason is None
+
+    def test_rerun_replaces_previous_rows(self, db_session):
+        from backend.agents.state import AgentOutcome
+        from backend.agents.supervisor import AGENT_NAMES
+        from backend.db.models import ReviewAgentRun
+        from backend.services.report_builder import AgentStatus
+        from backend.services.review_service import _persist_agent_runs
+
+        review = create_review(
+            db_session, repo_full_name="o/r", pr_number=3, head_sha="s"
+        )
+        report = AggregatedReport(
+            findings=[],
+            agent_statuses=[
+                AgentStatus(name=n, outcome=AgentOutcome.OK, finding_count=0)
+                for n in AGENT_NAMES
+            ],
+        )
+
+        _persist_agent_runs(db_session, review, self._state(
+            {n: "ok" for n in AGENT_NAMES}), report)
+        _persist_agent_runs(db_session, review, self._state(
+            {**{n: "ok" for n in AGENT_NAMES}, "quality": "failed"}), report)
+
+        rows = db_session.query(ReviewAgentRun).filter_by(review_id=review.id).all()
+        assert len(rows) == len(AGENT_NAMES)
+        quality = next(r for r in rows if r.agent == "quality")
+        assert quality.outcome == "failed"
+
+
+class TestCompletedAt:
+    def test_skipped_review_gets_a_terminal_timestamp(self, db_session):
+        from sqlalchemy.exc import IntegrityError
+
+        review = create_review(
+            db_session, repo_full_name="o/r", pr_number=1, head_sha="s"
+        )
+        call_count = [0]
+        original_commit = db_session.commit
+
+        def mock_commit():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise IntegrityError("", {}, None)
+            return original_commit()
+
+        with patch.object(db_session, "commit", side_effect=mock_commit):
+            with patch.object(db_session, "rollback"):
+                with patch.object(db_session, "merge", return_value=review):
+                    start_review(db_session, review)
+
+        assert review.status == "skipped"
+        assert review.completed_at is not None
+
+    def test_stale_sweep_sets_completed_at(self, db_session):
+        review = create_review(
+            db_session, repo_full_name="o/r", pr_number=2, head_sha="s"
+        )
+        review.status = "running"
+        review.created_at = datetime.now(timezone.utc) - timedelta(minutes=15)
+        db_session.commit()
+
+        assert sweep_stale_reviews(db_session) == 1
+
+        db_session.refresh(review)
+        assert review.status == "failed"
+        assert review.completed_at is not None

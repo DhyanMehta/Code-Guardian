@@ -90,3 +90,212 @@ def test_valid_signature_unreviewable_action_is_ignored(client: TestClient) -> N
     )
     assert resp.status_code == 202
     assert resp.json()["status"] == "ignored"
+
+
+def test_installation_created_persists_row(client: TestClient) -> None:
+    from backend.db.models import Installation
+    from backend.tests.conftest import _TestSessionLocal
+
+    payload = {
+        "action": "created",
+        "installation": {
+            "id": 999111,
+            "account": {"login": "octocat", "type": "User"},
+            "app_slug": "codeguardian",
+            "repository_selection": "selected",
+            "permissions": {"pull_requests": "write"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    resp = client.post(
+        "/webhooks/github",
+        headers={
+            "X-GitHub-Event": "installation",
+            "X-Hub-Signature-256": _sign(body),
+        },
+        content=body,
+    )
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["status"] == "processed"
+    assert data["installation_id"] == 999111
+
+    with _TestSessionLocal() as session:
+        inst = session.get(Installation, 999111)
+        assert inst is not None
+        assert inst.account_login == "octocat"
+        assert inst.account_type == "User"
+        assert inst.target_type == "selected"
+        assert inst.suspended_at is None
+        assert inst.uninstalled_at is None
+
+
+def test_installation_deleted_soft_deletes_row(client: TestClient) -> None:
+    from backend.db.models import Installation
+    from backend.tests.conftest import _TestSessionLocal
+
+    with _TestSessionLocal() as session:
+        inst = Installation(id=999222, account_login="octocat", account_type="User")
+        session.add(inst)
+        session.commit()
+
+    payload = {
+        "action": "deleted",
+        "installation": {"id": 999222, "account": {"login": "octocat"}},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    resp = client.post(
+        "/webhooks/github",
+        headers={
+            "X-GitHub-Event": "installation",
+            "X-Hub-Signature-256": _sign(body),
+        },
+        content=body,
+    )
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "processed"
+
+    with _TestSessionLocal() as session:
+        inst = session.get(Installation, 999222)
+        assert inst is not None
+        assert inst.uninstalled_at is not None
+
+
+def test_installation_suspend_and_unsuspend(client: TestClient) -> None:
+    from backend.db.models import Installation
+    from backend.tests.conftest import _TestSessionLocal
+
+    with _TestSessionLocal() as session:
+        inst = Installation(id=999333, account_login="octocat", account_type="User")
+        session.add(inst)
+        session.commit()
+
+    # Suspend
+    suspend_body = json.dumps({
+        "action": "suspend",
+        "installation": {"id": 999333, "account": {"login": "octocat"}},
+    }).encode("utf-8")
+    resp = client.post(
+        "/webhooks/github",
+        headers={
+            "X-GitHub-Event": "installation",
+            "X-Hub-Signature-256": _sign(suspend_body),
+        },
+        content=suspend_body,
+    )
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "processed"
+
+    with _TestSessionLocal() as session:
+        inst = session.get(Installation, 999333)
+        assert inst is not None
+        assert inst.suspended_at is not None
+
+    # Unsuspend
+    unsuspend_body = json.dumps({
+        "action": "unsuspend",
+        "installation": {"id": 999333, "account": {"login": "octocat"}},
+    }).encode("utf-8")
+    resp = client.post(
+        "/webhooks/github",
+        headers={
+            "X-GitHub-Event": "installation",
+            "X-Hub-Signature-256": _sign(unsuspend_body),
+        },
+        content=unsuspend_body,
+    )
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "processed"
+
+    with _TestSessionLocal() as session:
+        inst = session.get(Installation, 999333)
+        assert inst is not None
+        assert inst.suspended_at is None
+
+
+def test_pull_request_with_installation_auto_creates_and_links(client: TestClient) -> None:
+    from unittest.mock import patch
+    from backend.db.models import Installation, Review
+    from backend.tests.conftest import _TestSessionLocal
+
+    payload = {
+        "action": "opened",
+        "pull_request": {
+            "number": 10,
+            "head": {"sha": "def456", "repo": {"full_name": "org/repo"}},
+        },
+        "repository": {"full_name": "org/repo"},
+        "installation": {
+            "id": 888777,
+            "account": {"login": "org", "type": "Organization"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+
+    with patch("backend.api.webhooks.run_review") as mock_run_review:
+        resp = client.post(
+            "/webhooks/github",
+            headers={
+                "X-GitHub-Event": "pull_request",
+                "X-Hub-Signature-256": _sign(body),
+            },
+            content=body,
+        )
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["status"] == "accepted"
+        review_id = data["review_id"]
+
+        mock_run_review.assert_called_once()
+        _, kwargs = mock_run_review.call_args
+        assert kwargs.get("installation_id") == 888777
+
+    with _TestSessionLocal() as session:
+        inst = session.get(Installation, 888777)
+        assert inst is not None
+        assert inst.account_login == "org"
+
+        review = session.get(Review, review_id)
+        assert review is not None
+        assert review.installation_id == 888777
+
+
+def test_pull_request_with_suspended_installation_is_rejected(client: TestClient) -> None:
+    from datetime import datetime, timezone
+    from backend.db.models import Installation
+    from backend.tests.conftest import _TestSessionLocal
+
+    with _TestSessionLocal() as session:
+        inst = Installation(
+            id=777666,
+            account_login="suspended-org",
+            suspended_at=datetime.now(timezone.utc),
+        )
+        session.add(inst)
+        session.commit()
+
+    payload = {
+        "action": "opened",
+        "pull_request": {
+            "number": 11,
+            "head": {"sha": "def456", "repo": {"full_name": "suspended-org/repo"}},
+        },
+        "repository": {"full_name": "suspended-org/repo"},
+        "installation": {
+            "id": 777666,
+            "account": {"login": "suspended-org"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    resp = client.post(
+        "/webhooks/github",
+        headers={
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": _sign(body),
+        },
+        content=body,
+    )
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "rejected"
+    assert "suspended" in resp.json()["reason"]
+

@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CLONE_TIMEOUT = 60
 
+# The review pipeline diffs the head commit against its parent (``HEAD~1``) to work
+# out what the PR changed. A depth of 1 leaves ``HEAD~1`` unresolvable in the shallow
+# clone (``fatal: ambiguous argument 'HEAD~1'``), which silently produced an empty
+# diff and starved the Quality / Test-Gap / Documentation agents of input. Depth 2
+# keeps the clone cheap while guaranteeing the parent commit is present.
+CLONE_DEPTH = 2
+
 
 class WorkspaceError(Exception):
     """Any failure during workspace creation or cleanup."""
@@ -79,12 +86,12 @@ def checkout_pr(
 
     try:
         _run_git(
-            ["git", "clone", "--depth=1", clone_url, tmp_dir],
+            ["git", "clone", f"--depth={CLONE_DEPTH}", clone_url, tmp_dir],
             timeout=timeout,
             context="clone",
         )
         _run_git(
-            ["git", "fetch", "--depth=1", "origin", head_sha],
+            ["git", "fetch", f"--depth={CLONE_DEPTH}", "origin", head_sha],
             timeout=timeout,
             cwd=tmp_dir,
             context="fetch SHA",

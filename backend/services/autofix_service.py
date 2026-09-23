@@ -88,8 +88,12 @@ def create_autofix(db: Session, review_id: int) -> AutofixResult:
     if not fixable_findings:
         raise AutofixError(f"Review {review_id} has no fixable findings.")
 
-    settings = get_settings()
-    token = settings.require("github_token")
+    if review.installation_id:
+        from backend.tools.github_app import get_installation_token
+        token = get_installation_token(review.installation_id)
+    else:
+        settings = get_settings()
+        token = settings.require("github_token")
 
     branch_name = f"codeguardian/autofix/{review_id}"
 
@@ -108,6 +112,19 @@ def create_autofix(db: Session, review_id: int) -> AutofixResult:
 
     review.autofix_status = "pending_approval"
     review.autofix_branch = branch_name
+    # Persist the outcome detail, not just the status. The applied/skipped split is
+    # the evidence that apply-time re-validation rejected unusable fixes, and
+    # returning it only in this response meant it vanished on the next page load.
+    review.autofix_applied_count = len(result.applied_fixes)
+    review.autofix_skipped_fixes = json.dumps([
+        {
+            "target": f"{s.target_file}:{s.target_function}",
+            "target_file": s.target_file,
+            "target_function": s.target_function,
+            "reason": s.reason,
+        }
+        for s in result.skipped_fixes
+    ])
     db.commit()
 
     result.branch = branch_name

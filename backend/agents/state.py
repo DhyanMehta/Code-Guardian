@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import operator
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Annotated, Any, TypedDict
 
 from backend.tools.results import RawFinding, Severity
@@ -21,6 +22,37 @@ def _merge_dicts(left: dict, right: dict) -> dict:
     merged = left.copy()
     merged.update(right)
     return merged
+
+
+class AgentOutcome(str, Enum):
+    """Structured run outcome for a single specialist agent.
+
+    Reported by the agent (or by the supervisor node that wrapped it) rather than
+    inferred from note wording, so consumers can tell "ran cleanly and found
+    nothing" apart from "could not run at all". Note text is for humans; this field
+    is the contract.
+    """
+
+    OK = "ok"
+    """The agent completed its analysis. Zero findings is a real, clean result."""
+
+    DEGRADED = "degraded"
+    """The agent ran but could not complete its analysis (missing RAG context,
+    LLM unavailable, unusable model response). Zero findings here means
+    "unknown", not "clean"."""
+
+    FAILED = "failed"
+    """The agent raised an unhandled exception and produced nothing."""
+
+    @classmethod
+    def coerce(cls, value: object) -> "AgentOutcome":
+        """Best-effort conversion from a serialized value, defaulting to OK."""
+        if isinstance(value, cls):
+            return value
+        try:
+            return cls(str(value))
+        except ValueError:
+            return cls.OK
 
 
 @dataclass
@@ -72,6 +104,12 @@ class SecurityAgentResult:
     scanner_statuses: list[ScannerStatus] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
+    # Structured run outcome, same contract as the Quality Agent's. Scanners
+    # succeeding is not enough: if triage fails, real raw findings exist but none are
+    # reported, and calling that OK with a count of zero reads as "clean".
+    outcome: AgentOutcome = AgentOutcome.OK
+    failure_reason: str | None = None
+
     @property
     def failed_scanners(self) -> list[str]:
         return [s.scanner for s in self.scanner_statuses if not s.ok]
@@ -79,6 +117,11 @@ class SecurityAgentResult:
     @property
     def succeeded_scanners(self) -> list[str]:
         return [s.scanner for s in self.scanner_statuses if s.ok]
+
+    def mark_degraded(self, reason: str) -> None:
+        """Record that the agent ran but could not complete its analysis."""
+        self.outcome = AgentOutcome.DEGRADED
+        self.failure_reason = reason
 
 
 @dataclass
@@ -181,3 +224,7 @@ class ReviewState(TypedDict, total=False):
     quality_result: Annotated[dict[str, Any], _merge_dicts]
     test_gap_result: Annotated[dict[str, Any], _merge_dicts]
     doc_result: Annotated[dict[str, Any], _merge_dicts]
+
+    # Structured per-agent run outcome (an :class:`AgentOutcome` value), keyed by
+    # agent name. The report builder reads this instead of pattern-matching notes.
+    agent_outcomes: Annotated[dict[str, str], _merge_dicts]
