@@ -30,7 +30,7 @@ SCANNER = "semgrep"
 DEFAULT_TIMEOUT = 300
 _RULES_DIR = Path(__file__).resolve().parent / "semgrep_rules"
 DEFAULT_CONFIG = str(_RULES_DIR)
-_DOCKER_IMAGE = "returntocorp/semgrep:latest"
+_DOCKER_IMAGE = "returntocorp/semgrep:1.171.0"
 _DOCKER_MOUNT = "/src"
 
 
@@ -95,6 +95,8 @@ def parse_output(stdout: str, *, path_prefix: str = "") -> list[RawFinding]:
             raise ScannerOutputError(
                 SCANNER, f"malformed result entry: {exc}"
             ) from exc
+    if data.get("errors"):
+        raise ScannerOutputError(SCANNER, "Scanner reported errors; scan coverage is incomplete.", partial_findings=findings)
     return findings
 
 
@@ -177,7 +179,7 @@ def run(
     """
     try:
         return _run_native(target_path, config, timeout, executable)
-    except (ScannerNotFoundError, ScannerExecutionError) as exc:
+    except (ScannerNotFoundError, ScannerExecutionError, ScannerOutputError) as exc:
         if not shutil.which("docker"):
             raise
         logger.info(

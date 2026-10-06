@@ -30,6 +30,7 @@ from backend.agents.state import (
     DocTarget,
     DraftedDocstring,
     FunctionInfo,
+    AgentOutcome,
 )
 from backend.tools.llm_client import LLMClient, LLMConfigError, LLMError
 
@@ -76,6 +77,7 @@ class DocumentationAgent:
         file_reader_fn: FileReaderFn | None = None,
     ) -> None:
         self._llm = llm_client
+        self._analysis_errors = []
         self._llm_provided = llm_client is not None
         self._read_file = file_reader_fn or _default_file_reader
 
@@ -96,6 +98,7 @@ class DocumentationAgent:
             DocAgentResult with flagged functions and optionally drafted docstrings.
         """
         result = DocAgentResult()
+        self._analysis_errors = []
 
         if not diff.strip():
             result.notes.append("Empty diff; nothing to analyze.")
@@ -113,6 +116,9 @@ class DocumentationAgent:
             python_files, hunks, workspace_path
         )
 
+        if self._analysis_errors:
+            result.outcome = AgentOutcome.DEGRADED
+            result.notes.extend(self._analysis_errors)
         if not targets:
             result.notes.append(
                 "All modified public functions have adequate documentation."
@@ -137,16 +143,19 @@ class DocumentationAgent:
             if not file_hunks:
                 continue
 
-            abs_path = os.path.join(workspace_path, file_path)
             try:
+                from backend.agents._validation import safe_workspace_path
+                abs_path = str(safe_workspace_path(workspace_path, file_path))
                 source = self._read_file(abs_path)
-            except (OSError, IOError) as exc:
+            except (OSError, ValueError) as exc:
+                self._analysis_errors.append(f"Could not read {file_path}.")
                 logger.warning("Cannot read %s: %s", file_path, exc)
                 continue
 
             try:
                 tree = ast.parse(source, filename=file_path)
             except SyntaxError as exc:
+                self._analysis_errors.append(f"Could not parse {file_path}.")
                 logger.warning("Cannot parse %s: %s", file_path, exc)
                 continue
 
@@ -233,7 +242,7 @@ class DocumentationAgent:
         if len(body) > 2:
             return False
         non_self_params = [
-            arg.arg for arg in node.args.args
+            arg.arg for arg in node.args.posonlyargs + node.args.args + node.args.kwonlyargs + ([node.args.vararg] if node.args.vararg else []) + ([node.args.kwarg] if node.args.kwarg else [])
             if arg.arg not in ("self", "cls")
         ]
         return len(non_self_params) == 0
@@ -245,7 +254,7 @@ class DocumentationAgent:
             return []
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             return [
-                arg.arg for arg in node.args.args
+                arg.arg for arg in node.args.posonlyargs + node.args.args + node.args.kwonlyargs + ([node.args.vararg] if node.args.vararg else []) + ([node.args.kwarg] if node.args.kwarg else [])
                 if arg.arg not in ("self", "cls")
             ]
         return []
@@ -324,6 +333,7 @@ class DocumentationAgent:
                 raw_response = llm.complete(
                     system_prompt=_SYSTEM_PROMPT,
                     user_prompt=user_prompt,
+                    max_tokens=384,
                     json_mode=True,
                 )
             except LLMError as exc:
@@ -351,9 +361,10 @@ class DocumentationAgent:
             return None
 
         docstring = parsed.get("docstring", "")
-        params_documented = parsed.get("params_documented", [])
+        from backend.agents._validation import extract_documented_params
+        params_documented = list(extract_documented_params(docstring)) if isinstance(docstring, str) else []
 
-        if not docstring.strip():
+        if not isinstance(docstring, str) or not docstring.strip():
             return None
 
         # Anti-hallucination check 1: function must be in flagged list
@@ -373,7 +384,7 @@ class DocumentationAgent:
                     return None
 
         return DraftedDocstring(
-            target_function=target.function.name,
+            target_function=(target.function.class_name + "." if target.function.class_name else "") + target.function.name,
             target_file=target.function.file_path,
             docstring=docstring,
             params_valid=True,

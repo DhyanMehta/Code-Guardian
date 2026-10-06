@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from backend.agents.state import AgentOutcome, PRMetadata, ReviewState
 from backend.agents.supervisor import AGENT_NAMES, build_supervisor_graph
 from backend.config import get_settings
-from backend.db.models import Finding, Review, ReviewAgentRun
+from backend.db.models import Finding, Review, ReviewAgentRun, Installation, User
 from backend.services.report_builder import (
     AggregatedReport,
     UnifiedFinding,
@@ -55,18 +55,34 @@ def create_review(
     head_sha: str,
     is_fork: bool = False,
     installation_id: int | None = None,
+    base_sha: str | None = None,
+    base_ref: str | None = None,
+    delivery_id: str | None = None,
+    requested_by: int | None = None,
 ) -> Review:
     """Create a new Review row in 'pending' state."""
     review = Review(
         repo_full_name=repo_full_name,
         pr_number=pr_number,
         commit_sha=head_sha,
+        base_sha=base_sha,
+        base_ref=base_ref,
         status="pending",
         is_fork=is_fork,
         installation_id=installation_id,
+        delivery_id=delivery_id,
+        requested_by=requested_by,
     )
     db.add(review)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        if delivery_id:
+            existing = db.query(Review).filter_by(delivery_id=delivery_id).first()
+            if existing:
+                return existing
+        raise
     db.refresh(review)
     return review
 
@@ -78,15 +94,18 @@ def start_review(db: Session, review: Review) -> bool:
     guarantees atomicity — IntegrityError means another review is already running.
     """
     review.status = "running"
+    review.started_at = _utcnow()
+    review.heartbeat_at = _utcnow()
+    review.attempt = (review.attempt or 0) + 1
     try:
         db.commit()
         return True
     except IntegrityError:
         db.rollback()
-        review.status = "skipped"
-        review.summary = "Another review is already running for this PR."
-        # 'skipped' is terminal: this row will never run.
-        review.completed_at = _utcnow()
+        review.status = "pending"
+        review.summary = "Waiting for the running review of this PR."
+        # Retain the queued request for a later worker attempt.
+        review.completed_at = None
         db.merge(review)
         db.commit()
         return False
@@ -108,19 +127,60 @@ def run_review(db: Session, review_id: int, *, installation_id: int | None = Non
         )
         return
 
-    # Resolve the GitHub token: prefer installation token, fall back to legacy PAT.
+    try:
+        _run_review_body(db, review, installation_id=installation_id or review.installation_id)
+    except Exception as exc:
+        logger.exception("Review %d failed", review_id)
+        db.rollback()
+        review = db.get(Review, review_id)
+        review.status = "failed"
+        review.summary = f"Review failed ({type(exc).__name__}). See server logs."
+        review.completed_at = _utcnow()
+        db.commit()
+
+
+def _run_review_body(db, review, *, installation_id=None):
+    review_id = review.id
+    if installation_id:
+        inst = db.get(Installation, installation_id)
+        if inst and (inst.suspended_at or inst.uninstalled_at):
+            raise RuntimeError("Installation is inactive.")
+        if not review.standards_version:
+            review.standards_version = inst.standards_version if inst else None
+    from backend.rag.ingest import resolve_active_collection
+    if not review.standards_version:
+        review.standards_version = resolve_active_collection()
+    db.commit()
+    # Manual work is authorized as the requesting user, automated work as the app.
+    if review.requested_by:
+        from backend.services.authorization import user_token, require_repo
+        user = db.get(User, review.requested_by)
+        if user is None:
+            raise RuntimeError("Requesting user no longer exists.")
+        require_repo(user, installation_id, review.repo_full_name, write=True)
+        github_token = user_token(user)
     if installation_id is not None:
         from backend.tools.github_app import get_installation_token
-        github_token = get_installation_token(installation_id)
-    else:
+        if not review.requested_by:
+            github_token = get_installation_token(installation_id)
+    elif not review.requested_by:
         settings = get_settings()
+        if not settings.legacy_pat_enabled:
+            raise RuntimeError("Legacy PAT reviews are disabled.")
         github_token = settings.require("github_token")
+
+    checkout_kwargs: dict[str, Any] = {}
+    if review.base_sha:
+        checkout_kwargs["base_sha"] = review.base_sha
+    if review.base_ref:
+        checkout_kwargs["base_ref"] = review.base_ref
 
     try:
         with checkout_pr(
             review.repo_full_name,
             review.commit_sha or "",
             github_token,
+            **checkout_kwargs,
         ) as workspace_ctx:
             logger.info("Review %d waiting for global review lock", review_id)
             with _review_run_lock:
@@ -131,8 +191,9 @@ def run_review(db: Session, review_id: int, *, installation_id: int | None = Non
                 )
     except Exception as exc:
         logger.exception("Review %d failed: %s", review_id, exc)
+        db.rollback()
         review.status = "failed"
-        review.summary = f"Review failed: {exc}"
+        review.summary = f"Review failed ({type(exc).__name__}). See server logs."
         review.completed_at = _utcnow()
         db.commit()
 
@@ -145,20 +206,31 @@ def _execute_graph_and_persist(
     installation_id: int | None = None,
 ) -> None:
     """Invoke the supervisor graph and persist results."""
+    changed_files = _get_changed_files(
+        workspace_path,
+        base_sha=review.base_sha,
+        base_ref=review.base_ref,
+    )
     pr_metadata = PRMetadata(
         repo_full_name=review.repo_full_name,
         pr_number=review.pr_number,
         head_sha=review.commit_sha or "",
-        changed_files=_get_changed_files(workspace_path),
+        changed_files=changed_files,
     )
 
-    diff = _get_diff(workspace_path)
+    diff = _get_diff(
+        workspace_path,
+        base_sha=review.base_sha,
+        base_ref=review.base_ref,
+    )
 
     initial_state: ReviewState = {
         "review_id": review.id,
         "pr": pr_metadata,
         "diff": diff,
         "workspace_path": workspace_path,
+        "installation_id": installation_id,
+        "standards_version": review.standards_version,
         "raw_findings": {},
         "triaged_findings": {},
         "scanner_statuses": {},
@@ -181,16 +253,19 @@ def _execute_graph_and_persist(
         pr_number=review.pr_number,
         commit_sha=review.commit_sha or "",
     )
-    _post_pr_comment(review, comment_md, installation_id=installation_id)
+    review.report_markdown = comment_md
+    review.delivery_status = "pending"
 
     review.status = "completed"
     review.summary = _build_summary(report)
     review.completed_at = _utcnow()
     db.commit()
+    deliver_report(db, review)
 
 
 def _persist_findings(db: Session, review: Review, report: AggregatedReport) -> None:
     """Batch-insert Finding rows for all unified findings."""
+    db.query(Finding).filter_by(review_id=review.id).delete(synchronize_session=False)
     for uf in report.findings:
         finding = Finding(
             review_id=review.id,
@@ -201,9 +276,10 @@ def _persist_findings(db: Session, review: Review, report: AggregatedReport) -> 
             file_path=uf.file_path,
             line=uf.line,
             fix_data=json.dumps(uf.fix_data) if uf.fix_data else None,
+            evidence=json.dumps(uf.evidence) if uf.evidence else None,
         )
         db.add(finding)
-    db.commit()
+    db.flush()
 
 
 def _serialize_scanner_statuses(statuses: object) -> str | None:
@@ -244,7 +320,7 @@ def _persist_agent_runs(
     db.flush()
 
     for agent_name in AGENT_NAMES:
-        outcome = AgentOutcome.coerce(outcomes.get(agent_name, AgentOutcome.OK.value))
+        outcome = AgentOutcome.coerce(outcomes.get(agent_name, AgentOutcome.UNKNOWN.value))
         status = status_by_agent.get(agent_name)
         notes = notes_by_agent.get(agent_name) or []
         db.add(
@@ -266,10 +342,11 @@ def _persist_agent_runs(
                 scanner_statuses=_serialize_scanner_statuses(
                     scanners_by_agent.get(agent_name)
                 ),
+                raw_findings=json.dumps([f.to_prompt_dict() for f in state.get("raw_findings", {}).get(agent_name, [])]),
             )
         )
 
-    db.commit()
+    db.flush()
     logger.info(
         "Persisted %d agent run record(s) for review %d: %s",
         len(AGENT_NAMES),
@@ -287,7 +364,7 @@ def _build_summary(report: AggregatedReport) -> str:
     """Short text summary for the Review.summary column."""
     total = len(report.findings)
     if total == 0:
-        return "No issues found."
+        return "No issues found." if report.agent_statuses and all(s.succeeded for s in report.agent_statuses) else "No findings in completed checks; review incomplete."
     by_sev: dict[str, int] = {}
     for f in report.findings:
         by_sev[f.severity.value] = by_sev.get(f.severity.value, 0) + 1
@@ -304,18 +381,26 @@ def _post_pr_comment(
 ) -> None:
     """Post the review comment to the GitHub PR."""
     try:
-        if installation_id is not None:
+        if review.requested_by:
+            from sqlalchemy.orm import object_session
+            from backend.services.authorization import user_github
+            gh = user_github(object_session(review).get(User, review.requested_by))
+        elif installation_id is not None:
             from backend.tools.github_app import get_installation_github
             gh = get_installation_github(installation_id)
         else:
             from github import Github
             settings = get_settings()
             token = settings.require("github_token")
-            gh = Github(token)
+            gh = Github(token, timeout=15)
 
         repo = gh.get_repo(review.repo_full_name)
         pr = repo.get_pull(review.pr_number)
-        pr.create_issue_comment(comment_md)
+        marker = f"<!-- codeguardian-review:{review.id} -->"
+        body = marker + "\n" + comment_md
+        existing = next((c for c in pr.get_issue_comments() if (c.body or "") == body), None)
+        comment = existing or pr.create_issue_comment(body)
+        review.comment_id = str(comment.id)
         logger.info("Posted PR comment to %s#%d", review.repo_full_name, review.pr_number)
     except Exception as exc:
         logger.error(
@@ -323,6 +408,19 @@ def _post_pr_comment(
             review.id,
             exc,
         )
+        raise
+
+
+def deliver_report(db: Session, review: Review) -> None:
+    review.delivery_attempts = (review.delivery_attempts or 0) + 1
+    try:
+        _post_pr_comment(review, review.report_markdown or "", installation_id=review.installation_id)
+        review.delivery_status = "posted"
+        review.delivery_error = None
+    except Exception as exc:
+        review.delivery_status = "failed"
+        review.delivery_error = f"GitHub delivery failed ({type(exc).__name__})."
+    db.commit()
 
 
 def _run_git_diff(workspace_path: str, args: list[str], what: str) -> str | None:
@@ -359,20 +457,65 @@ def _run_git_diff(workspace_path: str, args: list[str], what: str) -> str | None
     return result.stdout
 
 
-def _get_changed_files(workspace_path: str) -> list[str]:
+def _resolve_base_target(
+    workspace_path: str,
+    base_sha: str | None = None,
+    base_ref: str | None = None,
+) -> str:
+    """Resolve the base commit target to diff HEAD against.
+
+    Prefers base_sha if present and reachable. If base_sha is unreachable but
+    base_ref was provided, attempts to find the merge-base between origin/base_ref
+    and HEAD. If both are absent or unreachable, fail explicitly.
+    """
+    if base_sha:
+        check = _run_git_diff(workspace_path, ["cat-file", "-t", base_sha], "check base_sha")
+        if check and check.strip() == "commit":
+            mb = _run_git_diff(workspace_path, ["merge-base", base_sha, "HEAD"], "merge-base")
+            if mb and mb.strip():
+                return mb.strip()
+
+    if base_ref:
+        candidates = [f"origin/{base_ref}", base_ref] if not base_ref.startswith("origin/") else [base_ref]
+        for ref_candidate in candidates:
+            mb = _run_git_diff(workspace_path, ["merge-base", ref_candidate, "HEAD"], "merge-base")
+            if mb and mb.strip():
+                return mb.strip()
+
+    logger.warning(
+        "Neither base_sha (%s) nor base_ref (%s) has a resolvable merge base",
+        base_sha,
+        base_ref,
+    )
+    raise RuntimeError("Cannot determine the PR merge base; review input is unavailable.")
+
+
+def _get_changed_files(
+    workspace_path: str,
+    base_sha: str | None = None,
+    base_ref: str | None = None,
+) -> list[str]:
     """Get list of changed files from the workspace (via git diff --name-only)."""
+    base_target = _resolve_base_target(workspace_path, base_sha, base_ref)
     out = _run_git_diff(
-        workspace_path, ["diff", "--name-only", "HEAD~1"], "changed files"
+        workspace_path, ["diff", "--name-only", "-z", base_target, "HEAD"], "changed files"
     )
     if out is None:
-        return []
-    return [f for f in out.strip().split("\n") if f]
+        raise RuntimeError("Cannot read PR changed files.")
+    return [f for f in out.split("\0") if f]
 
 
-def _get_diff(workspace_path: str) -> str:
+def _get_diff(
+    workspace_path: str,
+    base_sha: str | None = None,
+    base_ref: str | None = None,
+) -> str:
     """Get unified diff from the workspace."""
-    out = _run_git_diff(workspace_path, ["diff", "HEAD~1"], "diff")
-    return out or ""
+    base_target = _resolve_base_target(workspace_path, base_sha, base_ref)
+    out = _run_git_diff(workspace_path, ["-c", "core.quotepath=false", "diff", base_target, "HEAD"], "diff")
+    if out is None:
+        raise RuntimeError("Cannot read PR diff.")
+    return out
 
 
 def sweep_stale_reviews(db: Session) -> int:

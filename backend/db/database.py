@@ -27,6 +27,7 @@ def get_engine() -> Engine:
             settings.database_url,
             pool_pre_ping=True,
             future=True,
+            connect_args={"connect_timeout": 10, "options": "-c statement_timeout=30000 -c lock_timeout=10000"} if settings.database_url.startswith("postgresql") else {},
         )
         _SessionLocal = sessionmaker(
             bind=_engine, autoflush=False, autocommit=False, future=True

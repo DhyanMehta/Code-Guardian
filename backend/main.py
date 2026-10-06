@@ -12,8 +12,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Request
+from fastapi.responses import JSONResponse
 
-from backend.api import auth, autofix, health, installations, metrics, reviews, webhooks
+from backend.api import auth, autofix, health, installations, metrics, reviews, standards, webhooks
 from backend.config import get_settings
 
 logging.basicConfig(level=logging.INFO)
@@ -48,9 +50,20 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
+
+@app.middleware("http")
+async def protect_browser_mutations(request: Request, call_next):
+    if request.method in {"POST", "PATCH", "DELETE", "PUT"} and request.url.path != "/webhooks/github":
+        origin = request.headers.get("origin")
+        if (origin and origin not in _cors_origins) or (not origin and request.headers.get("sec-fetch-site") == "cross-site"):
+            return JSONResponse({"detail": "Origin is not allowed."}, status_code=403)
+    response = await call_next(request)
+    if request.url.path == "/auth/github/callback":
+        response.delete_cookie("oauth_state", secure=get_settings().cookie_secure, httponly=True, samesite="lax")
+    return response
 
 app.include_router(health.router)
 app.include_router(webhooks.router)
@@ -59,9 +72,11 @@ app.include_router(metrics.router)
 app.include_router(autofix.router)
 app.include_router(auth.router)
 app.include_router(installations.router)
+app.include_router(standards.router)
 
 
 @app.get("/", tags=["meta"])
 def root() -> dict[str, str]:
     """Basic service banner."""
     return {"service": "CodeGuardian AI", "version": app.version, "docs": "/docs"}
+# Reload trigger

@@ -13,7 +13,11 @@ from backend.rag.ingest import (
     NoSourceDocumentsError,
     _chunk_markdown,
     _stable_id,
+    delete_custom,
+    get_custom_collection_name,
     ingest,
+    ingest_custom,
+    resolve_active_collection,
 )
 
 
@@ -102,7 +106,7 @@ class TestIngest:
 
         import chromadb
         client = chromadb.PersistentClient(path=chroma_dir)
-        collection = client.get_collection("coding_standards")
+        collection = client.get_collection(resolve_active_collection(chroma_dir))
         assert collection.count() == count1
 
     def test_ingest_no_source_docs_raises(
@@ -135,3 +139,47 @@ class TestIngest:
         )
         count = ingest(standards_dir=tmp_path, persist_dir=chroma_dir)
         assert count >= 1
+
+
+class TestCustomStandardsIngestion:
+    def test_ingest_custom_and_delete(self, chroma_dir: str) -> None:
+        inst_id = 991122
+        content = (
+            "# Acme Corp Standards\n\n"
+            "## Rule 1\n\n"
+            "All variable names must begin with the company prefix acme_.\n\n"
+            "---\n\n"
+            "## Rule 2\n\n"
+            "All database queries must use parameterized prepared statements.\n"
+        )
+        col_name = get_custom_collection_name(inst_id)
+        count = ingest_custom(content, inst_id, filename="acme_rules.md", persist_dir=chroma_dir, collection_name=col_name)
+        assert count == 2
+
+        import chromadb
+        client = chromadb.PersistentClient(path=chroma_dir)
+        col_name = get_custom_collection_name(inst_id)
+        collection = client.get_collection(col_name)
+        assert collection.count() == 2
+
+        # Ingest again (replacement)
+        new_content = (
+            "## Rule 3\n\n"
+            "Only one rule exists now in this updated coding standards file.\n"
+        )
+        new_count = ingest_custom(new_content, inst_id, filename="acme_rules_v2.md", persist_dir=chroma_dir, collection_name=col_name + "_v2")
+        assert new_count == 1
+        assert client.get_collection(col_name).count() == 2
+        assert client.get_collection(col_name + "_v2").count() == 1
+
+        # Delete custom standards
+        deleted = delete_custom(inst_id, persist_dir=chroma_dir)
+        assert deleted is True
+
+        # Deleting again returns False (or doesn't raise error)
+        deleted_again = delete_custom(inst_id, persist_dir=chroma_dir)
+        assert deleted_again is False
+
+    def test_ingest_custom_empty_raises(self, chroma_dir: str) -> None:
+        with pytest.raises(NoSourceDocumentsError):
+            ingest_custom("", 12345, persist_dir=chroma_dir)

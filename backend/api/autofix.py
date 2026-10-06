@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from backend.api.auth import get_current_user
 from backend.db.database import get_db
 from backend.db.models import Review, User
+from backend.services.authorization import require_repo
 from backend.services.autofix_service import (
     AutofixError,
     approve_autofix,
@@ -32,7 +33,7 @@ router = APIRouter(prefix="/reviews", tags=["autofix"])
 
 
 class ApproveRequest(BaseModel):
-    approved_by: str
+    approved_by: str | None = None  # Compatibility only; identity always comes from the session.
 
 
 def _get_authorized_review(
@@ -64,6 +65,7 @@ def _get_authorized_review(
             detail="You do not have access to this review.",
         )
 
+    require_repo(current_user, review.installation_id, review.repo_full_name, write=True)
     return review
 
 
@@ -78,7 +80,7 @@ def create_autofix_endpoint(
     _get_authorized_review(review_id, current_user, db)
 
     try:
-        result = create_autofix(db, review_id)
+        result = create_autofix(db, review_id, user=current_user)
     except AutofixError as exc:
         error_msg = str(exc)
         if "not found" in error_msg:
@@ -108,7 +110,7 @@ def create_autofix_endpoint(
 def approve_autofix_endpoint(
     review_id: int,
     current_user: User = Depends(get_current_user),
-    body: ApproveRequest = ...,
+    body: ApproveRequest | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     """Record explicit human approval for the auto-fix branch."""
@@ -116,7 +118,7 @@ def approve_autofix_endpoint(
     _get_authorized_review(review_id, current_user, db)
 
     try:
-        approve_autofix(db, review_id, approved_by=body.approved_by)
+        approve_autofix(db, review_id, approved_by=current_user.github_login, user=current_user)
     except AutofixError as exc:
         error_msg = str(exc)
         if "not found" in error_msg:

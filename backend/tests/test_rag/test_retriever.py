@@ -110,3 +110,24 @@ class TestRetrieverErrorHandling:
         result = retrieve("def foo():", collection=mock_col)
         assert not result.has_context
         assert "query failed" in result.error.lower()
+
+
+class TestCustomStandardsRetrieval:
+    def test_retrieves_from_custom_collection_when_present(self, populated_chroma: str) -> None:
+        from backend.rag.ingest import ingest_custom
+        inst_id = 445566
+        custom_standard = (
+            "## Acme Security Rules\n\n"
+            "All endpoints must explicitly validate the X-Tenant-Id header before processing.\n"
+        )
+        ingest_custom(custom_standard, inst_id, filename="acme_security.md", persist_dir=populated_chroma, collection_name="coding_standards_445566")
+
+        result = retrieve("validate tenant request header", persist_dir=populated_chroma, installation_id=inst_id)
+        assert result.has_context
+        assert any("X-Tenant-Id" in p.text for p in result.passages)
+        assert result.passages[0].source_file == "acme_security.md"
+
+    def test_falls_back_to_default_when_no_custom_collection(self, populated_chroma: str) -> None:
+        result = retrieve("def getUserName():", persist_dir=populated_chroma, installation_id=99999)
+        assert result.has_context
+        assert any("snake_case" in p.text for p in result.passages)

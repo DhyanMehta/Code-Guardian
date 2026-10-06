@@ -13,7 +13,19 @@ import pytest
 
 from backend.agents.state import AgentOutcome
 from backend.db.models import Finding, Review, ReviewAgentRun
-from backend.tests.conftest import _TestSessionLocal
+from backend.tests.conftest import (
+    TEST_INSTALLATION_ID,
+    _TestSessionLocal,
+    create_test_auth_env,
+    make_auth_cookies,
+)
+
+
+@pytest.fixture(autouse=True)
+def _setup_auth(client):
+    with _TestSessionLocal() as session:
+        create_test_auth_env(session)
+    client.cookies.set("session_jwt", make_auth_cookies()["session_jwt"])
 
 
 @pytest.fixture()
@@ -22,6 +34,7 @@ def seeded():
     session = _TestSessionLocal()
 
     healthy = Review(
+        installation_id=TEST_INSTALLATION_ID,
         repo_full_name="owner/repo",
         pr_number=1,
         commit_sha="a" * 40,
@@ -65,6 +78,7 @@ def seeded():
     ])
 
     degraded = Review(
+        installation_id=TEST_INSTALLATION_ID,
         repo_full_name="owner/repo",
         pr_number=2,
         commit_sha="b" * 40,
@@ -186,7 +200,12 @@ class TestReviewDetail:
     def test_unrecorded_agent_runs_are_not_reported_as_ok(self, client):
         """A pre-Session-6 review has no agent-run rows; that is not 'fine'."""
         session = _TestSessionLocal()
-        legacy = Review(repo_full_name="owner/repo", pr_number=9, status="completed")
+        legacy = Review(
+            installation_id=TEST_INSTALLATION_ID,
+            repo_full_name="owner/repo",
+            pr_number=9,
+            status="completed",
+        )
         session.add(legacy)
         session.commit()
         legacy_id = legacy.id
@@ -251,7 +270,12 @@ class TestReviewReport:
 
     def test_report_conflicts_while_running(self, client):
         session = _TestSessionLocal()
-        running = Review(repo_full_name="owner/repo", pr_number=7, status="running")
+        running = Review(
+            installation_id=TEST_INSTALLATION_ID,
+            repo_full_name="owner/repo",
+            pr_number=7,
+            status="running",
+        )
         session.add(running)
         session.commit()
         running_id = running.id
@@ -269,7 +293,12 @@ class TestReviewReport:
         produce a report.
         """
         session = _TestSessionLocal()
-        skipped = Review(repo_full_name="owner/repo", pr_number=8, status="skipped")
+        skipped = Review(
+            installation_id=TEST_INSTALLATION_ID,
+            repo_full_name="owner/repo",
+            pr_number=8,
+            status="skipped",
+        )
         session.add(skipped)
         session.commit()
         skipped_id = skipped.id
@@ -297,6 +326,7 @@ class TestScannerStatusFidelity:
     def review_with_scanners(self):
         session = _TestSessionLocal()
         review = Review(
+            installation_id=TEST_INSTALLATION_ID,
             repo_full_name="owner/repo",
             pr_number=11,
             commit_sha="d" * 40,
@@ -361,3 +391,106 @@ class TestScannerStatusFidelity:
 
         assert quality["scanner_statuses"] == []
         assert quality["scanner_info"] is None
+
+
+class TestReviewsAuthAndIsolation:
+    def test_list_reviews_401_no_cookie(self, client, seeded):
+        client.cookies.clear()
+        resp = client.get("/reviews")
+        assert resp.status_code == 401
+
+    def test_list_reviews_401_garbage_cookie(self, client, seeded):
+        resp = client.get("/reviews", cookies={"session_jwt": "garbage-token"})
+        assert resp.status_code == 401
+
+    def test_review_detail_401_no_cookie(self, client, seeded):
+        client.cookies.clear()
+        resp = client.get(f"/reviews/{seeded['healthy']}")
+        assert resp.status_code == 401
+
+    def test_review_detail_401_garbage_cookie(self, client, seeded):
+        resp = client.get(
+            f"/reviews/{seeded['healthy']}", cookies={"session_jwt": "garbage-token"}
+        )
+        assert resp.status_code == 401
+
+    def test_review_report_401_no_cookie(self, client, seeded):
+        client.cookies.clear()
+        resp = client.get(f"/reviews/{seeded['healthy']}/report")
+        assert resp.status_code == 401
+
+    def test_review_report_401_garbage_cookie(self, client, seeded):
+        resp = client.get(
+            f"/reviews/{seeded['healthy']}/report", cookies={"session_jwt": "garbage-token"}
+        )
+        assert resp.status_code == 401
+
+    def test_reviews_403_cross_installation(self, client, seeded):
+        # Seed foreign review under installation_id=999999
+        with _TestSessionLocal() as session:
+            foreign = Review(
+                installation_id=999999,
+                repo_full_name="foreign/repo",
+                pr_number=50,
+                commit_sha="f" * 40,
+                status="completed",
+                summary="foreign review",
+            )
+            session.add(foreign)
+            session.commit()
+            foreign_id = foreign.id
+
+        try:
+            # 1. Foreign review excluded from /reviews list
+            list_resp = client.get("/reviews")
+            assert list_resp.status_code == 200
+            item_ids = [item["id"] for item in list_resp.json()["items"]]
+            assert foreign_id not in item_ids
+
+            # 2. GET /reviews/{id} -> 403
+            detail_resp = client.get(f"/reviews/{foreign_id}")
+            assert detail_resp.status_code == 403
+            assert detail_resp.json()["detail"] == "You do not have access to this review."
+
+            # 3. GET /reviews/{id}/report -> 403
+            report_resp = client.get(f"/reviews/{foreign_id}/report")
+            assert report_resp.status_code == 403
+            assert report_resp.json()["detail"] == "You do not have access to this review."
+        finally:
+            with _TestSessionLocal() as session:
+                r = session.get(Review, foreign_id)
+                if r:
+                    session.delete(r)
+                    session.commit()
+
+    def test_null_installation_review_is_403_and_excluded(self, client):
+        with _TestSessionLocal() as session:
+            null_rev = Review(
+                installation_id=None,
+                repo_full_name="legacy/repo",
+                pr_number=99,
+                commit_sha="e" * 40,
+                status="completed",
+                summary="legacy review with null installation",
+            )
+            session.add(null_rev)
+            session.commit()
+            null_id = null_rev.id
+
+        try:
+            list_resp = client.get("/reviews")
+            assert list_resp.status_code == 200
+            item_ids = [item["id"] for item in list_resp.json()["items"]]
+            assert null_id not in item_ids
+
+            detail_resp = client.get(f"/reviews/{null_id}")
+            assert detail_resp.status_code == 403
+
+            report_resp = client.get(f"/reviews/{null_id}/report")
+            assert report_resp.status_code == 403
+        finally:
+            with _TestSessionLocal() as session:
+                r = session.get(Review, null_id)
+                if r:
+                    session.delete(r)
+                    session.commit()

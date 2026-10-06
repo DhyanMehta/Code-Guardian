@@ -47,15 +47,20 @@ class Settings(BaseSettings):
 
     # Dashboard session JWTs (HS256).
     session_secret: str = ""
+    token_encryption_key: str = ""
+    legacy_pat_enabled: bool = False
+    review_timeout_seconds: int = 900
+    worker_poll_seconds: float = 2.0
+    max_review_attempts: int = 2
 
-    # LLM configuration. Default to gemini provider.
+    # LLM configuration. Default to Groq.
     llm_provider: str = "groq"
 
     # Gemini configuration.
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash-lite"
 
-    # Groq configuration (fallback provider). Model must be a currently-supported Groq model id;
+    # Groq configuration. Model must be a currently-supported Groq model id;
     # verify against Groq's model catalogue if changed.
     groq_model: str = "openai/gpt-oss-20b"
     groq_timeout_seconds: int = 30
@@ -69,17 +74,31 @@ class Settings(BaseSettings):
     llm_max_concurrent_calls: int = 1
     llm_min_call_interval_seconds: float = 1.5
 
+    # LLM token rate pacing (TPM limiter). Groq on-demand tier enforces an 8,000 TPM
+    # cap across a rolling 60-second window. The token limiter tracks estimated and
+    # actual token consumption, holding requests before dispatch if the remaining
+    # budget within the last 60 seconds is insufficient.
+    llm_tpm_limit: int = 8000
+    llm_tpm_safety_margin: float = 0.8
+    llm_empty_generation_retry_delay: float = 2.0
+
     # Infrastructure.
     database_url: str = (
         "postgresql+psycopg2://guardian:guardian@localhost:5432/codeguardian"
     )
-    chroma_persist_dir: str = "./chroma_db"
+    chroma_persist_dir: str = str(_PROJECT_ROOT / "chroma_db")
 
     # Dashboard. Comma-separated origins allowed to call the API from a browser.
     # Typed as a plain string, not list[str], because pydantic-settings would then
     # try to JSON-decode the env value and require `["http://..."]` in .env.
     # Never widened to "*": these endpoints create branches and record approvals.
     cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    # Session cookie ``Secure`` flag.  Defaults to ``True`` so production cookies
+    # are only sent over HTTPS.  Set ``COOKIE_SECURE=false`` in ``.env`` for local
+    # HTTP-only development (the browser will refuse to store a Secure cookie
+    # received over plain ``http://localhost``).
+    cookie_secure: bool = True
 
     def cors_origins(self) -> list[str]:
         """Parse ``cors_allowed_origins`` into a list of origins."""

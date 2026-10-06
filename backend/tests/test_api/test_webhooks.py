@@ -232,7 +232,7 @@ def test_pull_request_with_installation_auto_creates_and_links(client: TestClien
     }
     body = json.dumps(payload).encode("utf-8")
 
-    with patch("backend.api.webhooks.run_review") as mock_run_review:
+    with patch("backend.services.review_service.run_review") as mock_run_review:
         resp = client.post(
             "/webhooks/github",
             headers={
@@ -246,9 +246,7 @@ def test_pull_request_with_installation_auto_creates_and_links(client: TestClien
         assert data["status"] == "accepted"
         review_id = data["review_id"]
 
-        mock_run_review.assert_called_once()
-        _, kwargs = mock_run_review.call_args
-        assert kwargs.get("installation_id") == 888777
+        mock_run_review.assert_not_called()
 
     with _TestSessionLocal() as session:
         inst = session.get(Installation, 888777)
@@ -298,4 +296,98 @@ def test_pull_request_with_suspended_installation_is_rejected(client: TestClient
     assert resp.status_code == 202
     assert resp.json()["status"] == "rejected"
     assert "suspended" in resp.json()["reason"]
+
+
+def test_pull_request_with_manual_review_mode_is_ignored(client: TestClient) -> None:
+    from unittest.mock import patch
+    from backend.db.models import Installation, Review
+    from backend.tests.conftest import _TestSessionLocal
+
+    with _TestSessionLocal() as session:
+        inst = Installation(
+            id=555444,
+            account_login="manual-org",
+            review_mode="manual",
+        )
+        session.add(inst)
+        session.commit()
+
+    payload = {
+        "action": "opened",
+        "pull_request": {
+            "number": 22,
+            "head": {"sha": "def456", "repo": {"full_name": "manual-org/repo"}},
+        },
+        "repository": {"full_name": "manual-org/repo"},
+        "installation": {
+            "id": 555444,
+            "account": {"login": "manual-org"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+
+    with patch("backend.services.review_service.run_review") as mock_run_review:
+        resp = client.post(
+            "/webhooks/github",
+            headers={
+                "X-GitHub-Event": "pull_request",
+                "X-Hub-Signature-256": _sign(body),
+            },
+            content=body,
+        )
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["status"] == "ignored"
+        assert data["reason"] == "installation review_mode is manual"
+        assert data["installation_id"] == 555444
+
+        mock_run_review.assert_not_called()
+
+    with _TestSessionLocal() as session:
+        reviews = session.query(Review).filter_by(installation_id=555444).all()
+        assert len(reviews) == 0
+
+
+def test_pull_request_with_auto_review_mode_proceeds(client: TestClient) -> None:
+    from unittest.mock import patch
+    from backend.db.models import Installation, Review
+    from backend.tests.conftest import _TestSessionLocal
+
+    with _TestSessionLocal() as session:
+        inst = Installation(
+            id=666555,
+            account_login="auto-org",
+            review_mode="auto",
+        )
+        session.add(inst)
+        session.commit()
+
+    payload = {
+        "action": "opened",
+        "pull_request": {
+            "number": 33,
+            "head": {"sha": "aaa111", "repo": {"full_name": "auto-org/repo"}},
+        },
+        "repository": {"full_name": "auto-org/repo"},
+        "installation": {
+            "id": 666555,
+            "account": {"login": "auto-org"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+
+    with patch("backend.services.review_service.run_review") as mock_run_review:
+        resp = client.post(
+            "/webhooks/github",
+            headers={
+                "X-GitHub-Event": "pull_request",
+                "X-Hub-Signature-256": _sign(body),
+            },
+            content=body,
+        )
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["status"] == "accepted"
+        assert "review_id" in data
+        mock_run_review.assert_not_called()
 

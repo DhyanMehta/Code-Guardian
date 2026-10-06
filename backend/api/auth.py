@@ -6,11 +6,10 @@ Session 8: Provides OAuth login via the GitHub App ("Sign in with GitHub"):
   and accessible installations live, upserts User and UserInstallation records,
   and issues a 30-day HS256 session JWT.
 - ``GET /auth/me``: returns the currently authenticated user profile and installations.
-- ``POST /auth/logout``: client-side session discard acknowledgement.
+- ``POST /auth/logout``: invalidate existing sessions and clear the cookie.
 
-OAuth user tokens are used ONLY during the login callback to sync identity and
-installations.  They are NOT stored in the database (access_token_enc dropped per
-approved architecture).
+OAuth credentials are encrypted at rest and used for live user-scoped repository
+authorization. Installation credentials are reserved for automated app work.
 """
 
 from __future__ import annotations
@@ -29,6 +28,7 @@ from sqlalchemy.orm import Session
 from backend.config import get_settings
 from backend.db.database import get_db
 from backend.db.models import Installation, User, UserInstallation
+from backend.services.authorization import store_tokens, is_manager
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +61,6 @@ def get_current_user(
     Raises HTTP 401 on missing, expired, or invalid tokens.
     """
     token = request.cookies.get("session_jwt")
-    if not token:
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header[7:].strip()
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -108,6 +104,9 @@ def get_current_user(
             detail="User belonging to this token no longer exists.",
         )
 
+    if payload.get("session_version", 0) != user.session_version:
+        raise HTTPException(401, "Session was revoked; sign in again.")
+
     return user
 
 
@@ -117,8 +116,8 @@ def get_current_user(
 
 
 @router.get("/github/login")
-def github_login() -> dict[str, str]:
-    """Return the GitHub OAuth authorization URL."""
+def github_login(response: Response) -> dict[str, str]:
+    """Return the GitHub OAuth authorization URL and set an httpOnly anti-CSRF state cookie."""
     settings = get_settings()
     client_id = settings.github_app_client_id
     if not client_id:
@@ -127,7 +126,15 @@ def github_login() -> dict[str, str]:
             detail="GITHUB_APP_CLIENT_ID is not configured.",
         )
 
-    state = secrets.token_urlsafe(16)
+    state = secrets.token_urlsafe(32)
+    response.set_cookie(
+        key="oauth_state",
+        value=state,
+        max_age=600,
+        httponly=True,
+        samesite="lax",
+        secure=settings.cookie_secure,
+    )
     url = (
         f"https://github.com/login/oauth/authorize"
         f"?client_id={client_id}&state={state}"
@@ -138,17 +145,28 @@ def github_login() -> dict[str, str]:
 @router.post("/github/callback")
 def github_callback(
     req: CallbackRequest,
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Exchange an OAuth authorization code for a session JWT.
+    """Exchange an OAuth authorization code for a session JWT with server-side CSRF validation.
 
-    1. Exchanges ``code`` with GitHub for a temporary user access token.
-    2. Queries ``GET /user`` for identity.
-    3. Queries ``GET /user/installations`` to discover visible installations.
-    4. Upserts ``User`` and updates ``UserInstallation`` links.
-    5. Issues an HS256 session JWT valid for 30 days.
+    1. Validates and deletes the single-use httpOnly ``oauth_state`` cookie via constant-time compare.
+    2. Exchanges ``code`` with GitHub for a temporary user access token.
+    3. Queries ``GET /user`` for identity.
+    4. Queries ``GET /user/installations`` to discover visible installations.
+    5. Upserts ``User`` and updates ``UserInstallation`` links.
+    6. Issues an HS256 session JWT valid for 30 days.
     """
+    cookie_state = request.cookies.get("oauth_state")
+    response.delete_cookie("oauth_state")  # Single-use: always invalidate on attempt
+
+    if not cookie_state or not req.state or not secrets.compare_digest(cookie_state, req.state):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or missing OAuth state parameter.",
+        )
+
     settings = get_settings()
 
     try:
@@ -179,6 +197,7 @@ def github_callback(
                 json=token_payload,
                 headers={"Accept": "application/json"},
             )
+            token_resp.raise_for_status()
             token_data = token_resp.json()
     except Exception as exc:
         logger.error("Failed to reach GitHub for token exchange: %s", exc)
@@ -215,11 +234,19 @@ def github_callback(
             inst_resp = client.get(
                 "https://api.github.com/user/installations", headers=gh_headers
             )
-            installations_data = (
-                inst_resp.json().get("installations", [])
-                if inst_resp.status_code == 200
-                else []
-            )
+            inst_resp.raise_for_status()
+            installations_data = inst_resp.json().get("installations", [])
+            page = 1
+            while len(installations_data) < inst_resp.json().get("total_count", len(installations_data)):
+                page += 1
+                if page > 100:
+                    raise HTTPException(502, "Too many installation pages.")
+                next_resp = client.get("https://api.github.com/user/installations", headers=gh_headers, params={"page": page})
+                next_resp.raise_for_status()
+                batch = next_resp.json().get("installations", [])
+                if not batch:
+                    raise HTTPException(502, "Incomplete installation response.")
+                installations_data.extend(batch)
     except HTTPException:
         raise
     except Exception as exc:
@@ -229,7 +256,7 @@ def github_callback(
             detail=f"GitHub API query failed: {exc}",
         ) from exc
 
-    # Step 4: Upsert User (NO OAuth token stored!)
+    # Step 4: Upsert user and encrypted, user-scoped GitHub credentials.
     github_user_id = gh_user["id"]
     github_login = gh_user["login"]
     avatar_url = gh_user.get("avatar_url")
@@ -251,8 +278,8 @@ def github_callback(
         user.avatar_url = avatar_url
         user.last_login_at = _utcnow()
 
-    db.commit()
-    db.refresh(user)
+    store_tokens(user, token_data)
+    db.flush()
 
     # Refresh user_installations links live
     active_inst_ids = set()
@@ -272,7 +299,7 @@ def github_callback(
                 target_type=inst_item.get("repository_selection", "selected"),
             )
             db.add(inst_row)
-            db.commit()
+            db.flush()
 
         # Link user to installation
         existing_link = (
@@ -283,7 +310,7 @@ def github_callback(
             )
             .first()
         )
-        role = "admin" if inst_item.get("permissions", {}).get("administration") == "write" else "member"
+        role = "admin" if is_manager(user_token, github_login, account.get("login", ""), account.get("type", "User")) else "member"
         if existing_link is None:
             db.add(
                 UserInstallation(
@@ -296,15 +323,14 @@ def github_callback(
             existing_link.role = role
 
     # Remove links to installations the user no longer has access to
-    if active_inst_ids:
-        (
-            db.query(UserInstallation)
-            .filter(
-                UserInstallation.user_id == user.id,
-                ~UserInstallation.installation_id.in_(active_inst_ids),
-            )
-            .delete(synchronize_session=False)
+    (
+        db.query(UserInstallation)
+        .filter(
+            UserInstallation.user_id == user.id,
+            ~UserInstallation.installation_id.in_(active_inst_ids),
         )
+        .delete(synchronize_session=False)
+    )
     db.commit()
 
     # Step 5: Issue session JWT
@@ -316,6 +342,7 @@ def github_callback(
         "github_login": user.github_login,
         "iat": int(now.timestamp()),
         "exp": int(exp.timestamp()),
+        "session_version": user.session_version,
     }
     session_token = jwt.encode(payload, session_secret, algorithm=_JWT_ALGORITHM)
 
@@ -330,7 +357,7 @@ def github_callback(
         key="session_jwt",
         value=session_token,
         httponly=True,
-        secure=True,
+        secure=settings.cookie_secure,
         samesite="lax",
         max_age=_JWT_EXPIRY_DAYS * 24 * 3600,
     )
@@ -373,7 +400,15 @@ def get_me(
 
 
 @router.post("/logout")
-def logout(response: Response) -> dict[str, str]:
+def logout(response: Response, request: Request, db: Session = Depends(get_db)) -> dict[str, str]:
     """Acknowledge user logout and clear session cookie."""
-    response.delete_cookie("session_jwt", httponly=True, secure=True, samesite="lax")
+    settings = get_settings()
+    try:
+        user = get_current_user(request, db)
+    except HTTPException:
+        user = None
+    if user:
+        user.session_version += 1
+        db.commit()
+    response.delete_cookie("session_jwt", httponly=True, secure=settings.cookie_secure, samesite="lax")
     return {"status": "ok"}

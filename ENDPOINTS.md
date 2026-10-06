@@ -4,16 +4,32 @@ Base URL (local dev): `http://localhost:8000`
 
 Status legend: **[implemented]** = live as of the current session · **[planned]** = stubbed / future session.
 
+## Current reliability changes (`Dhyan`)
+
+These updates supersede older session descriptions below. See
+[the backend reliability contract](docs/BACKEND_RELIABILITY.md) for deployment and flow details.
+
+- Reviews are queued durably; run `python -m backend.worker` separately from the API.
+- Repository endpoints check the signed-in user's live GitHub access. Creating reviews and auto-fixes requires write permission. Settings and standards require verified owner/admin access.
+- After migrating, existing users must sign in again. User tokens are encrypted using `TOKEN_ENCRYPTION_KEY`; logout invalidates existing sessions.
+- Review detail includes `started_at`, `standards_version`, `delivery_status`, `delivery_error`, and `comment_id`. Findings include `evidence`; agent runs include `raw_findings`. Missing historical agent results are `unknown` with `recorded: false`.
+- A completed analysis can have failed comment delivery. The report endpoint returns the saved Markdown snapshot; the worker retries delivery separately.
+- Quality suggestions without deterministic proof are informational advisories. Degraded or unknown coverage must not be displayed as a clean review.
+- Standards upload/status returns `version`; reset affects future reviews and retains previous version collections.
+- Pull listings accept `page` and `per_page` (default 50, maximum 100).
+- Auto-fix approval uses the signed-in user's identity. The legacy `approved_by` request value is ignored; an empty body is accepted. Approval never merges code.
+- Browser mutations require a configured origin; cookie-based clients must send credentials.
+
 ## Health
 - `GET /health/live` — liveness probe. Returns 200 if the process is up. **[implemented — Session 1]**
-- `GET /health/ready` — readiness probe. Checks DB + ChromaDB reachability; degrades
+- `GET /health/ready` — readiness probe. Checks current DB migration, populated default standards, worker heartbeat, and credential configuration; degrades
   gracefully when dependencies are unavailable. **[implemented — Session 1]**
 
 ## GitHub Webhooks
 - `POST /webhooks/github` — receives GitHub PR events. Verifies the HMAC signature
   (`X-Hub-Signature-256`) against `GITHUB_WEBHOOK_SECRET`. On invalid signature returns
   401/403. On a valid `pull_request` `opened`/`synchronize`/`reopened` event, creates a
-  Review row, dispatches the supervisor graph as a background task, and returns 202
+  durable pending Review row for the separate worker, and returns 202
   Accepted with `review_id`. **[implemented — Session 1 (signature) + Session 5 (dispatch)]**
 
 ## Reviews (dashboard-facing)

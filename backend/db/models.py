@@ -28,6 +28,12 @@ class Base(DeclarativeBase):
     """Declarative base for all ORM models."""
 
 
+class WorkerHeartbeat(Base):
+    __tablename__ = "worker_heartbeat"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -41,6 +47,22 @@ class Review(Base):
     repo_full_name: Mapped[str] = mapped_column(String(255), index=True)
     pr_number: Mapped[int] = mapped_column(Integer, index=True)
     commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    base_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    base_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    delivery_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempt: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    standards_version: Mapped[str | None] = mapped_column(String(255))
+    report_markdown: Mapped[str | None] = mapped_column(Text)
+    delivery_status: Mapped[str | None] = mapped_column(String(32))
+    delivery_error: Mapped[str | None] = mapped_column(Text)
+    delivery_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    comment_id: Mapped[str | None] = mapped_column(String(64))
+    requested_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    autofix_commit_sha: Mapped[str | None] = mapped_column(String(64))
+    autofix_error: Mapped[str | None] = mapped_column(Text)
+    autofix_applied_fixes: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_fork: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -103,6 +125,7 @@ class Finding(Base):
     file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     line: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fix_data: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence: Mapped[str | None] = mapped_column(Text)
 
     review: Mapped["Review"] = relationship(back_populates="findings")
 
@@ -134,6 +157,7 @@ class ReviewAgentRun(Base):
     """JSON array of the agent's own notes, including transparency notes such as
     how many fabricated findings were dropped."""
     scanner_statuses: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_findings: Mapped[str | None] = mapped_column(Text)
     """JSON array of per-scanner outcomes (Security Agent only): which of Semgrep,
     Bandit, and Gitleaks ran and which failed. Needed so a re-rendered report can
     reproduce the posted comment exactly, and so the dashboard can say *which*
@@ -174,6 +198,18 @@ class Installation(Base):
     uninstalled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    review_mode: Mapped[str] = mapped_column(
+        String(16), default="auto", server_default="auto", nullable=False
+    )
+    """Review trigger mode: ``auto`` (webhook triggers review) or ``manual``."""
+    standards_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    standards_uploaded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    standards_chunks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    standards_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    standards_version: Mapped[str | None] = mapped_column(String(255))
+    """Raw text/Markdown of the uploaded coding standards document."""
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), default=_utcnow
     )
@@ -192,9 +228,8 @@ class Installation(Base):
 class User(Base):
     """A dashboard user identified via GitHub OAuth.
 
-    OAuth tokens are used only during the login callback to identify the user
-    and discover their installations.  They are NOT stored — only the GitHub
-    user ID, login, avatar URL, and timestamps are persisted.
+    OAuth credentials are stored encrypted using the deployment's Fernet key.
+    Session version supports logout and authorization-revocation invalidation.
     """
 
     __tablename__ = "users"
@@ -203,6 +238,10 @@ class User(Base):
     github_user_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     github_login: Mapped[str] = mapped_column(String(255), index=True)
     avatar_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    access_token_enc: Mapped[str | None] = mapped_column(Text)
+    refresh_token_enc: Mapped[str | None] = mapped_column(Text)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    session_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), default=_utcnow
     )

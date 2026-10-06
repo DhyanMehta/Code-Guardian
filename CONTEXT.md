@@ -7,6 +7,12 @@ report as a PR comment. It can optionally open an auto-fix commit on a separate
 branch, which always requires explicit human approval before merge.
 
 ## Architecture
+The current backend reliability contract is described in
+[docs/BACKEND_RELIABILITY.md](docs/BACKEND_RELIABILITY.md). Reviews now run in a
+separate durable worker; OAuth credentials are encrypted and authorize user actions;
+standards versions and report snapshots are retained for each review. Historical
+session notes below describe earlier iterations where these differed.
+
 - A FastAPI backend receives GitHub webhook events (PR opened / synchronize).
 - A Supervisor Agent (LangGraph) fans out to four specialist agents in parallel,
   then aggregates their outputs into one deduplicated, severity-ranked report.

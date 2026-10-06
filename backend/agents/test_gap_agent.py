@@ -29,6 +29,7 @@ from backend.agents.state import (
     FunctionInfo,
     TestGap,
     TestGapAgentResult,
+    AgentOutcome,
 )
 from backend.tools.llm_client import LLMClient, LLMConfigError, LLMError
 
@@ -76,6 +77,7 @@ class TestGapAgent:
         file_reader_fn: FileReaderFn | None = None,
     ) -> None:
         self._llm = llm_client
+        self._analysis_errors = []
         self._llm_provided = llm_client is not None
         self._read_file = file_reader_fn or _default_file_reader
 
@@ -96,6 +98,7 @@ class TestGapAgent:
             TestGapAgentResult with gaps and optionally drafted tests.
         """
         result = TestGapAgentResult()
+        self._analysis_errors = []
 
         if not diff.strip():
             result.notes.append("Empty diff; nothing to analyze.")
@@ -111,11 +114,17 @@ class TestGapAgent:
             python_files, hunks, workspace_path
         )
 
+        if self._analysis_errors:
+            result.outcome = AgentOutcome.DEGRADED
+            result.notes.extend(self._analysis_errors)
         if not modified_fns:
             result.notes.append("No functions found in diff hunks.")
             return result
 
         tested_symbols = self._discover_existing_tests(workspace_path)
+        if self._analysis_errors:
+            result.outcome = AgentOutcome.DEGRADED
+            result.notes = list(dict.fromkeys(result.notes + self._analysis_errors))
         gaps = self._identify_gaps(modified_fns, tested_symbols)
 
         if not gaps:
@@ -144,16 +153,19 @@ class TestGapAgent:
             if not file_hunks:
                 continue
 
-            abs_path = os.path.join(workspace_path, file_path)
             try:
+                from backend.agents._validation import safe_workspace_path
+                abs_path = str(safe_workspace_path(workspace_path, file_path))
                 source = self._read_file(abs_path)
-            except (OSError, IOError) as exc:
+            except (OSError, ValueError) as exc:
+                self._analysis_errors.append(f"Could not read {file_path}.")
                 logger.warning("Cannot read %s: %s", file_path, exc)
                 continue
 
             try:
                 tree = ast.parse(source, filename=file_path)
             except SyntaxError as exc:
+                self._analysis_errors.append(f"Could not parse {file_path}.")
                 logger.warning("Cannot parse %s: %s", file_path, exc)
                 continue
 
@@ -191,7 +203,7 @@ class TestGapAgent:
             class_name = self._get_enclosing_class(tree, node)
             params = [
                 arg.arg
-                for arg in node.args.args
+                for arg in node.args.posonlyargs + node.args.args + node.args.kwonlyargs + ([node.args.vararg] if node.args.vararg else []) + ([node.args.kwarg] if node.args.kwarg else [])
                 if arg.arg not in ("self", "cls")
             ]
             return_ann = (
@@ -254,6 +266,7 @@ class TestGapAgent:
         called_symbols: set[str] = set()
 
         for root, _dirs, files in os.walk(workspace_path):
+            _dirs[:] = [name for name in _dirs if name not in {".git", ".venv", "venv", "node_modules", "__pycache__"}]
             for filename in files:
                 if not filename.endswith(".py"):
                     continue
@@ -262,16 +275,41 @@ class TestGapAgent:
 
                 abs_path = os.path.join(root, filename)
                 try:
+                    from backend.agents._validation import safe_workspace_path
+                    safe_workspace_path(workspace_path, os.path.relpath(abs_path, workspace_path))
                     source = self._read_file(abs_path)
-                except (OSError, IOError):
+                except (OSError, ValueError):
+                    self._analysis_errors.append(f"Could not read test file {filename}.")
                     continue
 
                 try:
                     tree = ast.parse(source, filename=filename)
                 except SyntaxError:
+                    self._analysis_errors.append(f"Could not parse test file {filename}.")
                     continue
 
-                called_symbols.update(self._extract_call_targets(tree))
+                aliases = {}
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ImportFrom) and node.module:
+                        for item in node.names:
+                            aliases[item.asname or item.name] = node.module + "." + item.name
+                    elif isinstance(node, ast.Import):
+                        for item in node.names:
+                            aliases[item.asname or item.name] = item.name
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+                        constructor = ast.unparse(node.value.func)
+                        first, _, rest = constructor.partition(".")
+                        if first in aliases:
+                            for target in node.targets:
+                                if isinstance(target, ast.Name):
+                                    aliases[target.id] = aliases[first] + ("." + rest if rest else "")
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Call):
+                        name = ast.unparse(node.func)
+                        first, _, rest = name.partition(".")
+                        if first in aliases:
+                            called_symbols.add(aliases[first] + ("." + rest if rest else ""))
 
         return called_symbols
 
@@ -305,7 +343,9 @@ class TestGapAgent:
         """Filter to functions with no direct test reference."""
         gaps = []
         for fn in modified_fns:
-            if fn.name not in tested_symbols:
+            module = self._file_to_module(fn.file_path)
+            qualified = module + "." + ((fn.class_name + ".") if fn.class_name else "") + fn.name
+            if qualified not in tested_symbols:
                 gaps.append(TestGap(function=fn))
         return gaps
 
@@ -352,6 +392,7 @@ class TestGapAgent:
                 raw_response = llm.complete(
                     system_prompt=_SYSTEM_PROMPT,
                     user_prompt=user_prompt,
+                    max_tokens=512,
                     json_mode=True,
                 )
             except LLMError as exc:
@@ -405,8 +446,14 @@ class TestGapAgent:
                     )
                     return None
 
+        from backend.agents._validation import validate_drafted_test
+        qualified = (gap.function.class_name + "." if gap.function.class_name else "") + gap.function.name
+        valid, reason = validate_drafted_test(qualified, gap.function.file_path, test_code, workspace_path)
+        if not valid:
+            logger.warning("Drafted test rejected: %s", reason)
+            return None
         return DraftedTest(
-            target_function=gap.function.name,
+            target_function=(gap.function.class_name + "." if gap.function.class_name else "") + gap.function.name,
             target_file=gap.function.file_path,
             test_code=test_code,
             imports_valid=True,

@@ -501,7 +501,7 @@ class TestSecurityAgentOutcome:
         assert result.raw_findings == []
         assert result.outcome is AgentOutcome.OK
 
-    def test_partial_scanner_failure_alone_stays_ok(self) -> None:
+    def test_partial_scanner_failure_is_degraded(self) -> None:
         """One scanner down is already reported per-scanner; the agent still ran."""
         f_ok = _finding("bandit", "B101", 5)
         llm = _FakeLLM(json.dumps({"findings": [
@@ -516,7 +516,7 @@ class TestSecurityAgentOutcome:
             semgrep=_failing_semgrep, bandit=lambda p: [f_ok], llm=llm
         ).run("workspace")
 
-        assert result.outcome is AgentOutcome.OK
+        assert result.outcome is AgentOutcome.DEGRADED
 
 
 class TestSecurityNodeOutcome:

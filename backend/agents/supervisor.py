@@ -68,11 +68,17 @@ def _run_quality_node(state: ReviewState) -> dict[str, Any]:
     pr = state.get("pr")
     changed_files = pr.changed_files if pr else []
     workspace_path = state.get("workspace_path", "")
+    installation_id = state.get("installation_id")
     agent_name = "quality"
     try:
-        agent = QualityAgent()
+        agent = QualityAgent(installation_id=installation_id, standards_version=state.get("standards_version"))
         # workspace_path enables the AST symbol-existence gates.
-        result = agent.run(diff, changed_files, workspace_path)
+        result = agent.run(
+            diff,
+            changed_files,
+            workspace_path,
+            installation_id=installation_id,
+        )
         serialized = asdict(result)
         serialized["outcome"] = result.outcome.value
         serialized["failure_reason"] = result.failure_reason
@@ -117,7 +123,7 @@ def _run_test_gap_node(state: ReviewState) -> dict[str, Any]:
         return {
             "test_gap_result": {agent_name: serialized},
             "agent_notes": {agent_name: result.notes},
-            "agent_outcomes": {agent_name: AgentOutcome.OK.value},
+            "agent_outcomes": {agent_name: result.outcome.value},
         }
     except Exception as exc:
         logger.exception("Test-gap agent failed: %s", exc)
@@ -148,7 +154,7 @@ def _run_documentation_node(state: ReviewState) -> dict[str, Any]:
         return {
             "doc_result": {agent_name: serialized},
             "agent_notes": {agent_name: result.notes},
-            "agent_outcomes": {agent_name: AgentOutcome.OK.value},
+            "agent_outcomes": {agent_name: result.outcome.value},
         }
     except Exception as exc:
         logger.exception("Documentation agent failed: %s", exc)

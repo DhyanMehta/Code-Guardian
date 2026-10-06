@@ -17,7 +17,9 @@ PyGithub==2.9.1
 langgraph==1.2.9
 langchain-core==1.5.1
 groq==1.5.0
-openai>=1.0.0
+openai==3.16.2
+cryptography==49.0.0
+python-multipart==0.0.32
 
 # --- RAG vector store ---
 chromadb==1.5.9
@@ -35,7 +37,7 @@ psycopg2-binary==2.9.12
 httpx==0.28.1
 
 # --- Auth / JWT (Session 8) ---
-PyJWT==2.14.0
+PyJWT==2.13.0
 
 # --- Testing ---
 pytest==9.1.1

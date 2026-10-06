@@ -16,9 +16,32 @@ import ast
 import logging
 import os
 import re
+from pathlib import Path
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+def safe_workspace_path(workspace: str, target: str) -> Path:
+    root = Path(workspace).resolve()
+    path = (root / target).resolve()
+    if not target or path == root or not path.is_relative_to(root) or Path(target).is_absolute():
+        raise ValueError("Target path must remain inside the review workspace.")
+    return path
+
+
+def find_function(tree, name):
+    matches = []
+    def visit(node, prefix=""):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                qualified = prefix + child.name
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and (qualified == name or ("." not in name and child.name == name)):
+                    matches.append(child)
+                visit(child, qualified + ".")
+            else:
+                visit(child, prefix)
+    visit(tree)
+    return matches[0] if len(matches) == 1 else None
 
 
 @dataclass(frozen=True)
@@ -26,7 +49,7 @@ class SymbolInfo:
     """Where a defined symbol lives in a source file, and what kind it is."""
 
     name: str
-    kind: str  # "function" | "class" | "variable"
+    kind: str  # "function" | "class" | "variable" | "constant"
     start_line: int
     end_line: int
 
@@ -83,12 +106,38 @@ def collect_defined_symbols(file_path: str) -> dict[str, SymbolInfo] | None:
             name=name, kind=kind, start_line=start, end_line=end
         )
 
+    # First pass: module-level assignments in tree.body can be module-level constants
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    if _is_upper_snake_case(target.id) or _is_constant_node(node.value):
+                        _record(target.id, "constant", node)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name):
+                if _is_upper_snake_case(node.target.id) or (
+                    node.value is not None and _is_constant_node(node.value)
+                ):
+                    _record(node.target.id, "constant", node)
+
+    definitions = {}
+    def visit_definitions(parent, prefix=""):
+        for node in ast.iter_child_nodes(parent):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                qualified = prefix + node.name
+                _record(qualified, "class" if isinstance(node, ast.ClassDef) else "function", node)
+                definitions.setdefault(node.name, []).append(qualified)
+                visit_definitions(node, qualified + ".")
+            else:
+                visit_definitions(node, prefix)
+    visit_definitions(tree)
+    for bare, qualified in definitions.items():
+        if len(qualified) == 1:
+            symbols.setdefault(bare, symbols[qualified[0]])
+        elif bare in symbols:
+            del symbols[bare]
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            _record(node.name, "function", node)
-        elif isinstance(node, ast.ClassDef):
-            _record(node.name, "class", node)
-        elif isinstance(node, ast.Assign):
+        if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     _record(target.id, "variable", node)
@@ -111,11 +160,7 @@ def function_exists_in_file(func_name: str, file_path: str) -> bool:
     if tree is None:
         return False
 
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name == func_name:
-                return True
-    return False
+    return find_function(tree, func_name) is not None
 
 
 def get_function_params(func_name: str, file_path: str) -> set[str] | None:
@@ -124,9 +169,10 @@ def get_function_params(func_name: str, file_path: str) -> set[str] | None:
     if tree is None:
         return None
 
-    for node in ast.walk(tree):
+    selected = find_function(tree, func_name)
+    for node in [selected] if selected else []:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name == func_name:
+            if node is selected:
                 params = set()
                 for arg in node.args.args + node.args.posonlyargs + node.args.kwonlyargs:
                     if arg.arg != "self" and arg.arg != "cls":
@@ -173,23 +219,27 @@ def validate_drafted_test(
 
     Returns (is_valid, reason). If invalid, reason explains why.
     """
-    full_path = os.path.join(workspace_path, target_file)
+    try:
+        full_path = str(safe_workspace_path(workspace_path, target_file))
+        tree = ast.parse(test_code)
+    except (ValueError, SyntaxError):
+        return False, "Test syntax or target path is invalid."
 
     if not function_exists_in_file(target_function, full_path):
         return False, f"Function '{target_function}' no longer exists in {target_file}"
 
-    if target_function not in test_code:
+    target_name = target_function.rsplit(".", 1)[-1]
+    if not any(isinstance(n, ast.Call) and ((isinstance(n.func, ast.Name) and n.func.id == target_name) or (isinstance(n.func, ast.Attribute) and n.func.attr == target_name)) for n in ast.walk(tree)):
         return False, f"Test code does not reference target function '{target_function}'"
 
     # Check imports in the test code reference existing modules
-    import_lines = [
-        line.strip() for line in test_code.split("\n")
-        if line.strip().startswith(("import ", "from "))
-    ]
-    for line in import_lines:
-        module = _extract_module_from_import(line)
-        if module and not module.startswith(("pytest", "unittest", "mock", "os", "sys")):
-            if not module_exists(module, workspace_path):
+    import sys
+    for node in ast.walk(tree):
+        modules = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module] if isinstance(node, ast.ImportFrom) else []
+        for module in modules:
+            if not module or (isinstance(node, ast.ImportFrom) and node.level):
+                return False, "Generated tests must use resolvable absolute imports."
+            if module.split(".")[0] not in sys.stdlib_module_names | {"pytest", "mock"} and not module_exists(module, workspace_path):
                 return False, f"Import references non-existent module '{module}'"
 
     return True, ""
@@ -205,7 +255,10 @@ def validate_drafted_docstring(
 
     Returns (is_valid, reason). If invalid, reason explains why.
     """
-    full_path = os.path.join(workspace_path, target_file)
+    try:
+        full_path = str(safe_workspace_path(workspace_path, target_file))
+    except ValueError:
+        return False, "Docstring target is outside the workspace."
 
     if not function_exists_in_file(target_function, full_path):
         return False, f"Function '{target_function}' no longer exists in {target_file}"
@@ -225,7 +278,11 @@ def validate_drafted_docstring(
     return True, ""
 
 
-def validate_naming_convention(symbol: str, info: SymbolInfo) -> tuple[bool, str]:
+def validate_naming_convention(
+    symbol: str,
+    info: SymbolInfo,
+    claim_text: str = "",
+) -> tuple[bool, str]:
     """Check if a symbol actually violates a naming convention.
 
     Returns (violates, reason). If ``violates`` is False, the symbol conforms to
@@ -239,9 +296,19 @@ def validate_naming_convention(symbol: str, info: SymbolInfo) -> tuple[bool, str
     else:
         stripped = symbol
 
+    is_constant_claim = bool(
+        re.search(r"\b(constant|upper_snake|uppercase|upper case)\b", claim_text, re.IGNORECASE)
+    )
+
     if info.kind == "class":
         if _is_pascal_case(stripped):
             return False, f"'{symbol}' already follows PascalCase"
+    elif is_constant_claim:
+        if _is_upper_snake_case(stripped):
+            return False, f"'{symbol}' already follows UPPER_SNAKE_CASE"
+    elif info.kind == "constant" and not re.search(r"\bsnake_case\b", claim_text, re.IGNORECASE):
+        if _is_upper_snake_case(stripped):
+            return False, f"'{symbol}' already follows UPPER_SNAKE_CASE"
     else:
         if _is_snake_case(stripped):
             return False, f"'{symbol}' already follows snake_case"
@@ -257,6 +324,27 @@ def _is_snake_case(name: str) -> bool:
 def _is_pascal_case(name: str) -> bool:
     """Return True if name is valid PascalCase (starts upper, no underscores)."""
     return bool(re.fullmatch(r"[A-Z][a-zA-Z0-9]*", name))
+
+
+def _is_upper_snake_case(name: str) -> bool:
+    """Return True if name is valid UPPER_SNAKE_CASE (uppercase + underscores + digits)."""
+    return bool(re.fullmatch(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*", name))
+
+
+def _is_constant_node(node: ast.AST) -> bool:
+    """Return True if AST node represents an immutable/literal constant value."""
+    if isinstance(node, ast.Constant):
+        return True
+    if isinstance(node, ast.UnaryOp) and isinstance(node.operand, ast.Constant):
+        return True
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        return all(_is_constant_node(elt) for elt in node.elts)
+    if isinstance(node, ast.Dict):
+        return (
+            all(_is_constant_node(k) for k in node.keys if k is not None)
+            and all(_is_constant_node(v) for v in node.values)
+        )
+    return False
 
 
 def _extract_module_from_import(import_line: str) -> str | None:

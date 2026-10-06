@@ -59,6 +59,8 @@ def parse_output(stdout: str) -> list[RawFinding]:
             raise ScannerOutputError(
                 SCANNER, f"malformed result entry: {exc}"
             ) from exc
+    if data.get("errors"):
+        raise ScannerOutputError(SCANNER, "Scanner reported errors; scan coverage is incomplete.", partial_findings=findings)
     return findings
 
 

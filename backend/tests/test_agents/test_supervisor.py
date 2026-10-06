@@ -137,6 +137,18 @@ class TestQualityNode:
         assert output["quality_result"]["quality"]["findings"] == []
         assert "Agent failed:" in output["agent_notes"]["quality"][0]
 
+    def test_installation_id_passed_to_agent(self):
+        from backend.agents.quality_agent import QualityAgentResult
+        state = _base_state()
+        state["installation_id"] = 771122
+
+        with patch("backend.agents.quality_agent.QualityAgent") as MockAgent:
+            MockAgent.return_value.run.return_value = QualityAgentResult()
+            _run_quality_node(state)
+            MockAgent.assert_called_once_with(installation_id=771122, standards_version=None)
+            _, kwargs = MockAgent.return_value.run.call_args
+            assert kwargs.get("installation_id") == 771122
+
 
 class TestTestGapNode:
     def test_success(self):

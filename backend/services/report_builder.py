@@ -12,6 +12,7 @@ the latter as a success hides a broken review.
 from __future__ import annotations
 
 import json
+import html
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -52,6 +53,7 @@ _OUTCOME_DISPLAY = {
     AgentOutcome.OK: ("✅", ""),
     AgentOutcome.DEGRADED: ("⚠️", " could not run"),
     AgentOutcome.FAILED: ("❌", " failed"),
+    AgentOutcome.UNKNOWN: ("?", " coverage not recorded"),
 }
 
 
@@ -69,6 +71,7 @@ class UnifiedFinding:
     fixable: bool = False
     fix_data: dict | None = None
     record_id: int | None = None
+    evidence: dict | None = None
     """Database id when this finding was rebuilt from a persisted row. Lets callers
     map a ranked result back to the ORM record without re-deriving the order."""
 
@@ -122,7 +125,7 @@ def aggregate(state: ReviewState) -> AggregatedReport:
 def _agent_outcome(state: ReviewState, agent_name: str) -> AgentOutcome:
     """Read an agent's structured outcome, defaulting to OK when unreported."""
     outcomes = state.get("agent_outcomes", {}) or {}
-    return AgentOutcome.coerce(outcomes.get(agent_name, AgentOutcome.OK.value))
+    return AgentOutcome.coerce(outcomes.get(agent_name, AgentOutcome.UNKNOWN.value))
 
 
 def _first_note(notes: list[str]) -> str | None:
@@ -223,14 +226,17 @@ def _aggregate_quality(
     for qf in quality_findings:
         if isinstance(qf, dict):
             sev = Severity.normalize(qf.get("severity", "medium"))
+            if qf.get("evidence_kind", "advisory") != "verified":
+                sev = Severity.INFO
             findings.append(UnifiedFinding(
                 agent=agent_name,
                 severity=sev,
-                title=qf.get("rule_violated", "quality issue"),
+                title=("Advisory: " if qf.get("evidence_kind", "advisory") != "verified" else "") + qf.get("rule_violated", "quality issue"),
                 detail=qf.get("explanation", ""),
                 file_path=qf.get("file_path"),
                 line=qf.get("line"),
                 category=qf.get("rule_violated", ""),
+                evidence={"kind": qf.get("evidence_kind", "advisory"), "symbol": qf.get("symbol"), "source_file": qf.get("source_file"), "cited_passage": qf.get("cited_passage"), "standards_version": state.get("standards_version")},
             ))
 
 
@@ -250,7 +256,7 @@ def _aggregate_test_gap(
     drafted_by_func: dict[str, dict] = {}
     for dt in drafted_tests:
         if isinstance(dt, dict) and dt.get("imports_valid", False):
-            drafted_by_func[dt.get("target_function", "")] = dt
+            drafted_by_func[(dt.get("target_file", ""), dt.get("target_function", ""))] = dt
 
     statuses.append(AgentStatus(
         name=agent_name,
@@ -273,11 +279,12 @@ def _aggregate_test_gap(
         else:
             sev = Severity.LOW
 
-        draft = drafted_by_func.get(func_name)
+        qualified = (func_info.get("class_name") + "." if func_info.get("class_name") else "") + func_name
+        draft = drafted_by_func.get((func_info.get("file_path", ""), qualified))
         findings.append(UnifiedFinding(
             agent=agent_name,
             severity=sev,
-            title=f"Untested: {func_name}",
+            title=f"No direct test reference: {func_name}",
             detail=f"Risk score: {risk_score}/10",
             file_path=func_info.get("file_path"),
             line=func_info.get("start_line"),
@@ -303,7 +310,7 @@ def _aggregate_documentation(
     drafted_by_func: dict[str, dict] = {}
     for dd in drafted_docs:
         if isinstance(dd, dict) and dd.get("params_valid", False):
-            drafted_by_func[dd.get("target_function", "")] = dd
+            drafted_by_func[(dd.get("target_file", ""), dd.get("target_function", ""))] = dd
 
     statuses.append(AgentStatus(
         name=agent_name,
@@ -320,7 +327,8 @@ def _aggregate_documentation(
         reason = target.get("reason", "missing")
 
         sev = Severity.MEDIUM if reason == "missing" else Severity.LOW
-        draft = drafted_by_func.get(func_name)
+        qualified = (func_info.get("class_name") + "." if func_info.get("class_name") else "") + func_name
+        draft = drafted_by_func.get((func_info.get("file_path", ""), qualified))
 
         findings.append(UnifiedFinding(
             agent=agent_name,
@@ -353,7 +361,7 @@ def format_pr_comment(
     )
     failed = sum(1 for s in report.agent_statuses if s.outcome is AgentOutcome.FAILED)
 
-    if succeeded == total:
+    if total and succeeded == total:
         status_text = f"Completed ({total}/{total} agents succeeded)"
     else:
         detail_parts = [f"{succeeded}/{total} agents succeeded"]
@@ -370,13 +378,13 @@ def format_pr_comment(
     # Summary counts
     lines.append("### Summary")
     if not report.findings:
-        lines.append("No issues found.")
+        lines.append("No issues found." if total and succeeded == total else "No findings in completed checks; review incomplete.")
     else:
         by_sev: dict[Severity, list[UnifiedFinding]] = {}
         for f in report.findings:
             by_sev.setdefault(f.severity, []).append(f)
 
-        for sev in [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.INFO]:
+        for sev in Severity:
             group = by_sev.get(sev, [])
             if group:
                 agents_summary = _agent_breakdown(group)
@@ -405,7 +413,7 @@ def format_pr_comment(
         lines.append("")
 
         by_sev_ordered: list[tuple[Severity, list[UnifiedFinding]]] = []
-        for sev in [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.INFO]:
+        for sev in Severity:
             group = [f for f in report.findings if f.severity == sev]
             if group:
                 by_sev_ordered.append((sev, group))
@@ -418,7 +426,8 @@ def format_pr_comment(
             lines.append("|---|-------|------|---------|")
             for f in group:
                 loc = _format_location(f)
-                lines.append(f"| {idx} | {f.agent.replace('_', ' ').title()} | {loc} | {f.title}: {f.detail} |")
+                detail = html.escape(f"{f.title}: {f.detail}").replace("|", "\\|").replace("\n", "<br>").replace("\r", "")
+                lines.append(f"| {idx} | {f.agent.replace('_', ' ').title()} | {loc.replace('|', '&#124;')} | {detail} |")
                 idx += 1
             lines.append("")
 
@@ -436,6 +445,7 @@ def format_pr_comment(
             extra = f" ({s.scanner_info})"
         elif s.error_message:
             extra = f" ({s.error_message[:80]})"
+        extra = html.escape(extra).replace("|", "&#124;").replace("\n", " ").replace("\r", "")
         count = s.finding_count if s.succeeded else "—"
         lines.append(
             f"| {s.name.replace('_', ' ').title()} | {icon}{label}{extra} | {count} |"
@@ -468,10 +478,11 @@ def _agent_breakdown(findings: list[UnifiedFinding]) -> str:
 
 
 def _format_location(f: UnifiedFinding) -> str:
+    safe_path = html.escape(f.file_path or "").replace("`", "&#96;").replace("\n", " ").replace("\r", "")
     if f.file_path and f.line:
-        return f"`{f.file_path}:{f.line}`"
+        return f"`{safe_path}:{f.line}`"
     if f.file_path:
-        return f"`{f.file_path}`"
+        return f"`{safe_path}`"
     return "-"
 
 
@@ -520,6 +531,7 @@ def aggregate_from_records(records: Iterable[Any]) -> AggregatedReport:
                 fixable=fix_data is not None,
                 fix_data=fix_data,
                 record_id=getattr(record, "id", None),
+                evidence=json.loads(record.evidence) if getattr(record, "evidence", None) else None,
             )
         )
 

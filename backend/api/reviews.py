@@ -21,7 +21,7 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from backend.agents.state import AgentOutcome
 from backend.agents.supervisor import AGENT_NAMES
@@ -35,6 +35,7 @@ from backend.services.report_builder import (
     format_scanner_info,
 )
 from backend.tools.results import Severity
+from backend.services.authorization import authorized_repo_names, require_repo
 
 router = APIRouter(prefix="/reviews", tags=["reviews"])
 
@@ -77,6 +78,7 @@ def _serialize_finding(f: Finding, rank: int | None = None) -> dict[str, Any]:
         "line": f.line,
         "fixable": fix_data is not None,
         "fix_data": fix_data,
+        "evidence": json.loads(f.evidence) if f.evidence else None,
     }
     if rank is not None:
         payload["rank"] = rank
@@ -112,12 +114,13 @@ def _agent_runs_payload(review: Review) -> list[dict[str, Any]]:
         payload.append({
             "agent": name,
             "outcome": AgentOutcome.coerce(run.outcome).value,
-            "recorded": True,
+            "recorded": AgentOutcome.coerce(run.outcome) is not AgentOutcome.UNKNOWN,
             "finding_count": run.finding_count,
             "failure_reason": run.failure_reason,
             "notes": json.loads(run.notes) if run.notes else [],
             "scanner_statuses": scanner_statuses,
             "scanner_info": format_scanner_info(scanner_statuses),
+            "raw_findings": json.loads(run.raw_findings) if run.raw_findings else [],
         })
     return payload
 
@@ -133,6 +136,8 @@ def _autofix_payload(review: Review) -> dict[str, Any]:
             else None
         ),
         "applied_count": review.autofix_applied_count,
+        "commit_sha": review.autofix_commit_sha,
+        "error": review.autofix_error,
         "skipped_fixes": (
             json.loads(review.autofix_skipped_fixes)
             if review.autofix_skipped_fixes
@@ -162,6 +167,7 @@ def list_reviews(
     ]
 
     query = db.query(Review).filter(Review.installation_id.in_(allowed_inst_ids))
+    query = query.filter(Review.repo_full_name.in_(authorized_repo_names(current_user)))
     if repo:
         query = query.filter(Review.repo_full_name == repo)
     if installation_id is not None:
@@ -174,7 +180,7 @@ def list_reviews(
 
     total = query.count()
     reviews = (
-        query.order_by(Review.created_at.desc(), Review.id.desc())
+        query.options(selectinload(Review.findings), selectinload(Review.agent_runs)).order_by(Review.created_at.desc(), Review.id.desc())
         .offset(offset)
         .limit(limit)
         .all()
@@ -189,6 +195,8 @@ def list_reviews(
             "pr_number": r.pr_number,
             "commit_sha": r.commit_sha,
             "status": r.status,
+            "delivery_status": r.delivery_status,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
             "summary": r.summary,
             "is_fork": r.is_fork,
             "created_at": r.created_at.isoformat() if r.created_at else None,
@@ -245,6 +253,7 @@ def get_review(
             detail="You do not have access to this review.",
         )
 
+    require_repo(current_user, review.installation_id, review.repo_full_name)
     ranked = _rank_findings(review.findings)
 
     findings_by_agent: dict[str, list[dict]] = {}
@@ -258,6 +267,11 @@ def get_review(
         "pr_number": review.pr_number,
         "commit_sha": review.commit_sha,
         "status": review.status,
+        "delivery_status": review.delivery_status,
+        "delivery_error": review.delivery_error,
+        "comment_id": review.comment_id,
+        "standards_version": review.standards_version,
+        "started_at": review.started_at.isoformat() if review.started_at else None,
         "summary": review.summary,
         "is_fork": review.is_fork,
         "created_at": review.created_at.isoformat() if review.created_at else None,
@@ -348,6 +362,9 @@ def get_review_report(
             detail = f"Review {review_id} is still in '{review.status}' state."
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
+    require_repo(current_user, review.installation_id, review.repo_full_name)
+    if review.report_markdown:
+        return {"review_id": review.id, "markdown": review.report_markdown}
     report = aggregate_from_records(review.findings)
     report.agent_statuses = _agent_statuses_from_records(review)
 
@@ -372,7 +389,7 @@ def _agent_statuses_from_records(review: Review) -> list[AgentStatus]:
             statuses.append(
                 AgentStatus(
                     name=name,
-                    outcome=AgentOutcome.OK,
+                    outcome=AgentOutcome.UNKNOWN,
                     finding_count=sum(
                         1 for f in review.findings if f.agent == name
                     ),

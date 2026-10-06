@@ -129,6 +129,10 @@ class ScannerTimeoutError(ScannerError):
 class ScannerOutputError(ScannerError):
     """The scanner produced output that could not be parsed."""
 
+    def __init__(self, scanner, message, *, partial_findings=None):
+        super().__init__(scanner, message)
+        self.partial_findings = partial_findings or []
+
 
 class ScannerExecutionError(ScannerError):
     """The scanner exited with an unexpected/error status."""

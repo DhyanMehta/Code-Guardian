@@ -9,11 +9,24 @@ import pytest
 from backend.agents.state import AgentOutcome
 from backend.db.models import Finding, Review, ReviewAgentRun
 from backend.services.metrics_service import SEVERITY_WEIGHTS
-from backend.tests.conftest import _TestSessionLocal
+from backend.tests.conftest import (
+    TEST_INSTALLATION_ID,
+    _TestSessionLocal,
+    create_test_auth_env,
+    make_auth_cookies,
+)
+
+
+@pytest.fixture(autouse=True)
+def _setup_auth(client):
+    with _TestSessionLocal() as session:
+        create_test_auth_env(session)
+    client.cookies.set("session_jwt", make_auth_cookies()["session_jwt"])
 
 
 def _review(session, *, pr, created, status="completed", **kwargs):
     review = Review(
+        installation_id=kwargs.pop("installation_id", TEST_INSTALLATION_ID),
         repo_full_name=kwargs.pop("repo", "owner/repo"),
         pr_number=pr,
         commit_sha="c" * 40,
@@ -181,7 +194,7 @@ class TestTrends:
         # Of the four fixture reviews none has all four agents recorded.
         assert totals["coverage_recorded_reviews"] == 0
         assert totals["coverage_complete_reviews"] == 0
-        assert totals["reviews_with_coverage_gap"] == 1
+        assert totals["reviews_with_coverage_gap"] == 4
 
     def test_totals(self, client, seeded_history):
         totals = client.get("/metrics/trends").json()["totals"]
@@ -235,3 +248,66 @@ class TestTrends:
         assert body["points"] == []
         assert body["totals"]["findings"] == 0
         assert body["repos"] == []
+
+
+class TestTrendsAuthAndIsolation:
+    def test_trends_401_no_cookie(self, client):
+        client.cookies.clear()
+        resp = client.get("/metrics/trends")
+        assert resp.status_code == 401
+
+    def test_trends_401_garbage_cookie(self, client):
+        resp = client.get("/metrics/trends", cookies={"session_jwt": "garbage-token"})
+        assert resp.status_code == 401
+
+    def test_trends_403_cross_installation(self, client):
+        resp = client.get("/metrics/trends", params={"installation_id": 999999})
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "You do not have access to this installation."
+
+    def test_trends_isolation_with_foreign_review_having_findings(self, client, seeded_history):
+        # Seed a foreign review under installation_id=999999 with 5 findings
+        with _TestSessionLocal() as session:
+            foreign = Review(
+                installation_id=999999,
+                repo_full_name="foreign/repo",
+                pr_number=88,
+                commit_sha="f" * 40,
+                status="completed",
+                created_at=datetime.now(timezone.utc),
+            )
+            session.add(foreign)
+            session.commit()
+            foreign_id = foreign.id
+
+            for i in range(5):
+                session.add(Finding(
+                    review_id=foreign_id,
+                    agent="security",
+                    severity="high",
+                    title=f"foreign-finding-{i}",
+                ))
+            session.commit()
+
+        try:
+            # Query /metrics/trends without installation_id parameter as authenticated user
+            resp = client.get("/metrics/trends")
+            assert resp.status_code == 200
+            data = resp.json()
+
+            # Confirm foreign review is absent from points
+            point_ids = [p["review_id"] for p in data["points"]]
+            assert foreign_id not in point_ids
+            assert "foreign/repo" not in data["repos"]
+
+            # Confirm findings count in totals does not include the 5 foreign findings
+            # seeded_history has 4 findings, foreign has 5
+            assert data["totals"]["findings"] == 4
+            assert data["totals"]["reviews"] == 4
+        finally:
+            with _TestSessionLocal() as session:
+                session.query(Finding).filter(Finding.review_id == foreign_id).delete()
+                r = session.get(Review, foreign_id)
+                if r:
+                    session.delete(r)
+                session.commit()

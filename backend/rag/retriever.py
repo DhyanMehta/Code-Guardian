@@ -13,12 +13,12 @@ from dataclasses import dataclass, field
 import chromadb
 
 from backend.config import get_settings
-from backend.rag.ingest import COLLECTION_NAME, ChromaConnectionError
+from backend.rag.ingest import COLLECTION_NAME, ChromaConnectionError, resolve_active_collection
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TOP_K = 5
-_MIN_RELEVANCE_SCORE = 1.5  # ChromaDB L2 distance; lower = more similar
+_MIN_RELEVANCE_SCORE = 1.65  # ChromaDB L2 distance; lower = more similar
 
 
 class RetrieverError(Exception):
@@ -58,8 +58,13 @@ class RetrievalResult:
 
 def _get_collection(
     persist_dir: str | None = None,
+    installation_id: int | None = None,
+    collection_name: str | None = None,
 ) -> chromadb.Collection:
-    """Open the existing standards collection.
+    """Open the standards collection.
+
+    If *installation_id* is provided and a custom collection exists with documents,
+    returns that collection. Otherwise falls back to the default collection.
 
     Raises:
         ChromaConnectionError: cannot initialize ChromaDB client.
@@ -74,8 +79,30 @@ def _get_collection(
             f"Failed to connect to ChromaDB at {resolved_dir}: {exc}"
         ) from exc
 
+    if collection_name:
+        try:
+            col = client.get_collection(name=collection_name)
+            if not col.count():
+                raise CollectionEmptyError("Selected standards version is empty.")
+            return col
+        except CollectionEmptyError:
+            raise
+        except Exception as exc:
+            raise CollectionNotFoundError("Selected standards version is unavailable.") from exc
+    if installation_id is not None:
+        custom_name = f"coding_standards_{installation_id}"
+        try:
+            custom_col = client.get_collection(name=custom_name)
+            if custom_col.count() > 0:
+                return custom_col
+            logger.info("Custom collection '%s' is empty; falling back to default.", custom_name)
+        except Exception as exc:
+            from chromadb.errors import NotFoundError
+            if not isinstance(exc, NotFoundError):
+                raise ChromaConnectionError("Custom standards could not be read.") from exc
+
     try:
-        collection = client.get_collection(name=COLLECTION_NAME)
+        collection = client.get_collection(name=resolve_active_collection(resolved_dir))
     except Exception as exc:
         raise CollectionNotFoundError(
             f"Collection '{COLLECTION_NAME}' not found. Run ingestion first. "
@@ -96,6 +123,8 @@ def retrieve(
     top_k: int | None = None,
     persist_dir: str | None = None,
     collection: chromadb.Collection | None = None,
+    installation_id: int | None = None,
+    collection_name: str | None = None,
 ) -> RetrievalResult:
     """Query ChromaDB for standards passages relevant to the given code/diff context.
 
@@ -104,6 +133,7 @@ def retrieve(
         top_k: number of results to return (default: DEFAULT_TOP_K).
         persist_dir: override for ChromaDB persistence directory.
         collection: pre-built collection (for testing); skips client init if provided.
+        installation_id: optional GitHub App installation ID to query custom standards.
 
     Returns:
         RetrievalResult with passages on success, or with error string on failure.
@@ -117,7 +147,7 @@ def retrieve(
         return result
 
     try:
-        col = collection or _get_collection(persist_dir)
+        col = collection or _get_collection(persist_dir, installation_id=installation_id, collection_name=collection_name)
     except (ChromaConnectionError, CollectionNotFoundError, CollectionEmptyError) as exc:
         result.error = str(exc)
         logger.warning("Retriever could not access collection: %s", exc)

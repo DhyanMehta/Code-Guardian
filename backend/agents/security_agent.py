@@ -36,6 +36,7 @@ from pathlib import Path
 
 from backend.agents._diff_utils import function_overlaps_diff, parse_diff_hunks
 from backend.agents.state import (
+    AgentOutcome,
     ScannerStatus,
     SecurityAgentResult,
     TriagedFinding,
@@ -108,12 +109,17 @@ class SecurityAgent:
                 findings = runner(workspace_path)
             except ScannerError as exc:
                 logger.warning("Scanner '%s' failed: %s", scanner, exc)
+                partial = self._normalize_finding_paths(getattr(exc, "partial_findings", []), workspace_path)
+                if hunks_by_file is not None:
+                    partial = self._scope_to_diff(scanner, partial, workspace_path, hunks_by_file)
+                result.raw_findings.extend(partial)
                 result.scanner_statuses.append(
                     ScannerStatus(
                         scanner=scanner,
                         ok=False,
                         error=str(exc),
                         error_type=type(exc).__name__,
+                        finding_count=len(partial),
                     )
                 )
                 continue
@@ -138,7 +144,7 @@ class SecurityAgent:
                 "Scanner(s) failed and were skipped: "
                 + ", ".join(result.failed_scanners)
             )
-            if len(result.failed_scanners) > len(result.succeeded_scanners):
+            if result.failed_scanners:
                 result.mark_degraded(
                     f"{len(result.failed_scanners)}/{len(self._runners)} scanners "
                     f"failed ({', '.join(result.failed_scanners)}); security coverage "
@@ -281,6 +287,33 @@ class SecurityAgent:
         return self._llm
 
     def _triage(self, result: SecurityAgentResult) -> None:
+        batches = []
+        current = []
+        size = 0
+        for finding in result.raw_findings:
+            length = len(json.dumps(finding.to_prompt_dict()))
+            if length > 5000:
+                result.mark_degraded("A scanner finding exceeds the triage input budget; raw evidence is retained.")
+                continue
+            if current and (size + length > 5000 or len(current) >= 8):
+                batches.append(current)
+                current, size = [], 0
+            current.append(finding)
+            size += length
+        if current:
+            batches.append(current)
+        for index, batch in enumerate(batches):
+            if index >= 20:
+                result.mark_degraded("Security triage batch limit reached; remaining raw evidence is retained.")
+                break
+            partial = SecurityAgentResult(raw_findings=batch)
+            self._triage_batch(partial)
+            result.triaged_findings.extend(partial.triaged_findings)
+            result.notes.extend(partial.notes)
+            if partial.outcome is not AgentOutcome.OK:
+                result.mark_degraded(partial.failure_reason or "Security triage incomplete.")
+
+    def _triage_batch(self, result: SecurityAgentResult) -> None:
         llm = self._get_llm()
         if llm is None:
             result.mark_degraded("LLM client is not configured; findings untriaged.")
@@ -297,7 +330,9 @@ class SecurityAgent:
 
         try:
             raw_response = llm.complete(
-                system_prompt=_SYSTEM_PROMPT, user_prompt=user_prompt
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                max_tokens=1024,
             )
         except LLMError as exc:
             logger.warning("LLM triage failed: %s", exc)
@@ -324,6 +359,7 @@ class SecurityAgent:
             return
 
         dropped = 0
+        seen = set()
         for item in parsed:
             fingerprint = item.get("fingerprint")
             raw = by_fingerprint.get(fingerprint) if fingerprint else None
@@ -336,6 +372,11 @@ class SecurityAgent:
                     fingerprint,
                 )
                 continue
+            if fingerprint in seen:
+                continue
+            if Severity.normalize(item.get("triaged_severity")) is Severity.UNKNOWN or not str(item.get("explanation", "")).strip():
+                continue
+            seen.add(fingerprint)
             result.triaged_findings.append(
                 TriagedFinding(
                     fingerprint=raw.fingerprint,
@@ -355,6 +396,10 @@ class SecurityAgent:
                 f"Dropped {dropped} unverifiable LLM finding(s) not present in raw "
                 "scanner output."
             )
+        missing = set(by_fingerprint) - seen
+        if missing:
+            result.mark_degraded(f"{len(missing)} scanner finding(s) were omitted from triage.")
+            result.notes.append(self._untriaged_note(result))
 
     @staticmethod
     def _untriaged_note(result: SecurityAgentResult) -> str:

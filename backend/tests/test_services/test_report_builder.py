@@ -232,7 +232,7 @@ class TestAggregation:
         # execute_query has a valid drafted test, calculate has a valid docstring
         assert len(fixable) == 2
         fixable_titles = {f.title for f in fixable}
-        assert "Untested: execute_query" in fixable_titles
+        assert "No direct test reference: execute_query" in fixable_titles
         assert "Docstring missing: calculate" in fixable_titles
 
     def test_unfixable_when_imports_invalid(self):
@@ -291,7 +291,7 @@ class TestAggregation:
         assert report.findings == []
         assert len(report.agent_statuses) == 4
         for s in report.agent_statuses:
-            assert s.succeeded is True
+            assert s.succeeded is False
             assert s.finding_count == 0
 
     def test_test_gap_risk_score_to_severity(self):
@@ -301,8 +301,8 @@ class TestAggregation:
         tg_findings = [f for f in report.findings if f.agent == "test_gap"]
         # execute_query risk=8 → HIGH, helper risk=3 → LOW
         by_title = {f.title: f for f in tg_findings}
-        assert by_title["Untested: execute_query"].severity == Severity.HIGH
-        assert by_title["Untested: helper"].severity == Severity.LOW
+        assert by_title["No direct test reference: execute_query"].severity == Severity.HIGH
+        assert by_title["No direct test reference: helper"].severity == Severity.LOW
 
     def test_documentation_reason_to_severity(self):
         state = _state_with_all_agents()
@@ -488,7 +488,7 @@ class TestFormatPRComment:
         }
         report = aggregate(state)
         md = format_pr_comment(report, pr_number=1)
-        assert "No issues found" in md
+        assert "review incomplete" in md
 
     def test_partial_failure_shows_in_status(self):
         state = _state_with_all_agents()

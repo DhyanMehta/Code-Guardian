@@ -2,8 +2,8 @@
 
 Session 8: Provides installation and repository discovery for authenticated users:
 - ``GET /installations``: lists installations accessible to the logged-in user.
-- ``GET /installations/{id}/repos``: lists repositories accessible to the installation
-  (queried live from GitHub using the installation's access token).
+- ``GET /installations/{id}/repos``: lists repositories accessible to the user
+  (queried live from GitHub using the user's access token).
 - ``GET /installations/{id}/repos/{owner}/{repo}/pulls``: lists open pull requests
   for a given repository.
 """
@@ -11,41 +11,54 @@ Session 8: Provides installation and repository discovery for authenticated user
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
-import httpx
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.api.auth import get_current_user
-from backend.db.database import get_db, get_sessionmaker
+from backend.db.database import get_db
 from backend.db.models import Installation, User, UserInstallation
-from backend.services.review_service import create_review, run_review
-from backend.tools.github_app import get_installation_github, get_installation_token
+from backend.services.review_service import create_review
+
+from backend.services.authorization import require_repo, require_manager, accessible_repos, user_github
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/installations", tags=["installations"])
 
 
+class UpdateSettingsRequest(BaseModel):
+    review_mode: Literal["auto", "manual"]
+
+
 def _verify_user_installation_access(
     user: User,
     installation_id: int,
     db: Session,
+    required_role: str | None = None,
 ) -> Installation:
     """Verify *user* has access to *installation_id* and the installation is active.
 
-    Raises HTTP 403 if unlinked, HTTP 404 if missing/uninstalled,
+    Raises HTTP 403 if unlinked or role insufficient, HTTP 404 if missing/uninstalled,
     or HTTP 400 if suspended.
     """
-    has_access = any(
-        link.installation_id == installation_id
-        for link in user.installation_links
+    link = next(
+        (l for l in user.installation_links if l.installation_id == installation_id),
+        None,
     )
-    if not has_access:
+    if link is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have access to this installation.",
+        )
+
+    if required_role is not None and link.role != required_role:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Operation requires '{required_role}' role on this installation.",
         )
 
     inst = db.get(Installation, installation_id)
@@ -59,6 +72,9 @@ def _verify_user_installation_access(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Installation {installation_id} is currently suspended.",
         )
+
+    if required_role == "admin":
+        require_manager(user, inst)
 
     return inst
 
@@ -80,10 +96,51 @@ def list_installations(
             "app_slug": inst.app_slug,
             "target_type": inst.target_type,
             "role": link.role,
+            "review_mode": inst.review_mode,
             "suspended": inst.suspended_at is not None,
             "created_at": inst.created_at.isoformat() if inst.created_at else None,
         })
     return results
+
+
+@router.get("/{installation_id}/settings")
+def get_installation_settings(
+    installation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Get settings for *installation_id*."""
+    inst = _verify_user_installation_access(current_user, installation_id, db)
+    return {
+        "installation_id": inst.id,
+        "review_mode": inst.review_mode,
+    }
+
+
+@router.patch("/{installation_id}/settings")
+def update_installation_settings(
+    installation_id: int,
+    payload: UpdateSettingsRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Update settings for *installation_id*. Requires 'admin' role."""
+    inst = _verify_user_installation_access(
+        current_user, installation_id, db, required_role="admin"
+    )
+    inst.review_mode = payload.review_mode
+    db.commit()
+    db.refresh(inst)
+    logger.info(
+        "User %s updated installation %d review_mode to %s.",
+        current_user.github_login,
+        installation_id,
+        inst.review_mode,
+    )
+    return {
+        "installation_id": inst.id,
+        "review_mode": inst.review_mode,
+    }
 
 
 @router.get("/{installation_id}/repos")
@@ -100,61 +157,7 @@ def list_installation_repos(
     """
     _verify_user_installation_access(current_user, installation_id, db)
 
-    try:
-        token = get_installation_token(installation_id)
-    except Exception as exc:
-        logger.error(
-            "Failed to acquire token for installation %d: %s",
-            installation_id,
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to acquire installation token: {exc}",
-        ) from exc
-
-    try:
-        with httpx.Client(timeout=15) as client:
-            resp = client.get(
-                "https://api.github.com/installation/repositories",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                },
-            )
-    except Exception as exc:
-        logger.error("GitHub API error fetching repositories: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"GitHub API connection error: {exc}",
-        ) from exc
-
-    if resp.status_code != 200:
-        logger.warning(
-            "GitHub /installation/repositories failed with %d: %s",
-            resp.status_code,
-            resp.text[:200],
-        )
-        raise HTTPException(
-            status_code=resp.status_code,
-            detail=f"GitHub API error: {resp.text[:200]}",
-        )
-
-    data = resp.json()
-    repos = [
-        {
-            "id": r["id"],
-            "name": r["name"],
-            "full_name": r["full_name"],
-            "private": r.get("private", False),
-            "html_url": r.get("html_url", ""),
-            "default_branch": r.get("default_branch", "main"),
-            "open_issues_count": r.get("open_issues_count", 0),
-        }
-        for r in data.get("repositories", [])
-    ]
-    return repos
-
+    return [{key: r.get(key) for key in ("id", "name", "full_name", "private", "html_url", "default_branch", "open_issues_count")} for r in accessible_repos(current_user, installation_id)]
 
 @router.get("/{installation_id}/repos/{owner}/{repo}/pulls")
 def list_installation_repo_pulls(
@@ -162,18 +165,22 @@ def list_installation_repo_pulls(
     owner: str,
     repo: str,
     state: str = Query("open", pattern="^(open|closed|all)$"),
+    page: int = Query(1, ge=1, le=1000),
+    per_page: int = Query(50, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """List pull requests for a repository accessible to *installation_id*."""
     _verify_user_installation_access(current_user, installation_id, db)
+    require_repo(current_user, installation_id, f"{owner}/{repo}")
 
     try:
-        gh = get_installation_github(installation_id)
+        gh = user_github(current_user)
         gh_repo = gh.get_repo(f"{owner}/{repo}")
         pulls = gh_repo.get_pulls(state=state)
         items = []
-        for p in pulls:
+        from itertools import islice
+        for p in islice(pulls, (page - 1) * per_page, page * per_page):
             items.append({
                 "number": p.number,
                 "title": p.title,
@@ -183,8 +190,6 @@ def list_installation_repo_pulls(
                 "created_at": p.created_at.isoformat() if p.created_at else None,
                 "html_url": p.html_url,
             })
-            if len(items) >= 50:
-                break
         return items
     except HTTPException:
         raise
@@ -214,12 +219,15 @@ def trigger_review(
 ) -> dict[str, Any]:
     """Manually trigger a CodeGuardian review for a specific pull request."""
     _verify_user_installation_access(current_user, installation_id, db)
+    require_repo(current_user, installation_id, f"{owner}/{repo}", write=True)
 
     try:
-        gh = get_installation_github(installation_id)
+        gh = user_github(current_user)
         gh_repo = gh.get_repo(f"{owner}/{repo}")
         pr = gh_repo.get_pull(number)
         head_sha = pr.head.sha
+        base_sha = pr.base.sha if pr.base else None
+        base_ref = pr.base.ref if pr.base else None
         
         # Detect fork PRs
         head_repo_full_name = pr.head.repo.full_name if pr.head.repo else ""
@@ -244,20 +252,12 @@ def trigger_review(
         repo_full_name=f"{owner}/{repo}",
         pr_number=number,
         head_sha=head_sha,
+        base_sha=base_sha,
+        base_ref=base_ref,
         is_fork=is_fork,
         installation_id=installation_id,
+        requested_by=current_user.id,
     )
-
-    session_factory = get_sessionmaker()
-
-    def _background_review(review_id: int, inst_id: int | None) -> None:
-        session = session_factory()
-        try:
-            run_review(session, review_id, installation_id=inst_id)
-        finally:
-            session.close()
-
-    background_tasks.add_task(_background_review, review.id, installation_id)
 
     logger.info(
         "Manual review triggered by user %s for %s/%s#%d (review_id=%d).",

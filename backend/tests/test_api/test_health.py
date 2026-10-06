@@ -22,4 +22,4 @@ def test_readiness_reports_checks(client: TestClient) -> None:
     body = resp.json()
     assert "status" in body
     assert "checks" in body
-    assert set(body["checks"]) == {"database", "chromadb"}
+    assert set(body["checks"]) == {"database", "chromadb", "worker", "configuration"}

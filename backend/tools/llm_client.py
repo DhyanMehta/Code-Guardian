@@ -19,6 +19,7 @@ import logging
 import threading
 import time
 import re
+import uuid
 from contextlib import contextmanager
 
 import openai
@@ -72,6 +73,10 @@ _TRANSIENT = (
     openai.APIConnectionError, openai.APITimeoutError, openai.InternalServerError, openai.RateLimitError
 )
 
+MAX_RATE_LIMIT_WAIT: float = 65.0
+"""Maximum cumulative seconds to wait across rate-limit retries for a single call.
+Derived from the 60-second rolling TPM window plus 5s for clock skew and network RTT."""
+
 
 # --------------------------------------------------------------------------- #
 # Process-wide call throttle
@@ -90,6 +95,176 @@ _call_gate: threading.Semaphore | None = None
 _last_call_started_at: float = 0.0
 
 
+# --------------------------------------------------------------------------- #
+# Process-wide token-aware TPM rate limiter
+# --------------------------------------------------------------------------- #
+class TokenBucketLimiter:
+    """Process-wide rolling 60-second token-per-minute (TPM) rate limiter.
+
+    Coordinates concurrent agent requests across threads, ensuring the cumulative
+    tokens (estimated before request, reconciled after completion) do not exceed
+    the safe TPM budget within any 60-second window.
+    """
+
+    def __init__(
+        self,
+        tpm_limit: int = 8000,
+        safety_margin: float = 0.8,
+        window_seconds: float = 60.0,
+    ) -> None:
+        self.tpm_limit = tpm_limit
+        self.safety_margin = safety_margin
+        self.window_seconds = window_seconds
+        self._lock = threading.Lock()
+        # History of (monotonic_timestamp, token_count)
+        self._history: list[tuple[float, int]] = []
+        self._cooldown_until: float = 0.0
+        self._reservations: dict[str, float] = {}
+
+    @property
+    def safe_tpm(self) -> int:
+        return max(100, int(self.tpm_limit * self.safety_margin))
+
+    def _evict_expired(self, now: float) -> None:
+        cutoff = now - self.window_seconds
+        self._history = [(ts, tokens) for ts, tokens in self._history if ts > cutoff]
+        self._reservations = {key: ts for key, ts in self._reservations.items() if ts > cutoff}
+
+    def current_used_tokens(self, now: float | None = None) -> int:
+        with self._lock:
+            t = now if now is not None else time.monotonic()
+            self._evict_expired(t)
+            return sum(tokens for _, tokens in self._history)
+
+    def record_cooldown(self, delay: float) -> None:
+        """Record a server-mandated cooldown duration (e.g. from 429 Retry-After)."""
+        with self._lock:
+            target = time.monotonic() + delay
+            if target > self._cooldown_until:
+                self._cooldown_until = target
+                logger.info("Token limiter cooldown set for %.2fs", delay)
+
+    def record_tokens(self, token_count: int, ts: float | None = None) -> None:
+        """Directly record tokens consumed (e.g. prompt tokens billed by failed attempts)."""
+        with self._lock:
+            t = ts if ts is not None else time.monotonic()
+            self._history.append((t, token_count))
+
+    def acquire(self, estimated_tokens: int, max_wait: float = MAX_RATE_LIMIT_WAIT, *, reservation_id: str | None = None) -> float:
+        """Wait until sufficient token budget is available and reserve it atomically.
+
+        Returns:
+            The cumulative seconds waited.
+        Raises:
+            LLMRateLimitError if wait would exceed max_wait.
+        """
+        if estimated_tokens > self.safe_tpm:
+            raise LLMRateLimitError("Request exceeds configured token budget; split the input.")
+        start_time = time.monotonic()
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                self._evict_expired(now)
+                used = sum(tokens for _, tokens in self._history)
+
+                cooldown_remaining = self._cooldown_until - now
+                if cooldown_remaining > 0:
+                    wait_time = cooldown_remaining
+                elif used + estimated_tokens <= self.safe_tpm or not self._history:
+                    # Budget is available, or history is empty (allow clean first request)
+                    self._history.append((now, estimated_tokens))
+                    if reservation_id:
+                        self._reservations[reservation_id] = now
+                    return time.monotonic() - start_time
+                else:
+                    # Calculate wait time based on oldest token entry
+                    oldest_ts, _ = self._history[0]
+                    wait_time = max(0.05, (oldest_ts + self.window_seconds) - now + 0.05)
+
+            elapsed = time.monotonic() - start_time
+            if elapsed + wait_time > max_wait:
+                raise LLMRateLimitError(
+                    f"Token limiter wait cap ({max_wait}s) exceeded: "
+                    f"need {estimated_tokens} tokens, currently used {used}/{self.safe_tpm}"
+                )
+
+            logger.info(
+                "Token limiter pacing: used %d/%d TPM, need %d; waiting %.2fs",
+                used,
+                self.safe_tpm,
+                estimated_tokens,
+                wait_time,
+            )
+            t_before_sleep = time.monotonic()
+            time.sleep(wait_time)
+            t_after_sleep = time.monotonic()
+
+            with self._lock:
+                # Mark cooldown as satisfied after sleep (supports mocked time.sleep in tests)
+                if self._cooldown_until > 0 and self._cooldown_until <= now + wait_time + 0.1:
+                    self._cooldown_until = 0.0
+                # If time.sleep was mocked (clock did not advance), evict oldest to avoid infinite loop
+                if t_after_sleep <= t_before_sleep and self._history:
+                    self._history.pop(0)
+
+
+    def reconcile(self, reservation_ts: float | str, estimated_tokens: int, actual_tokens: int) -> None:
+        """Update an estimated reservation with actual token usage reported by provider."""
+        with self._lock:
+            identified = isinstance(reservation_ts, str)
+            reservation_ts = self._reservations.pop(reservation_ts, None) if identified else reservation_ts
+            if reservation_ts is None:
+                return
+            for i, (ts, tokens) in enumerate(self._history):
+                if (ts == reservation_ts if identified else abs(ts - reservation_ts) < 1.0) and tokens == estimated_tokens:
+                    self._history[i] = (ts, actual_tokens)
+                    break
+
+    def reset(self) -> None:
+        with self._lock:
+            self._history.clear()
+            self._reservations.clear()
+            self._cooldown_until = 0.0
+
+
+def estimate_tokens(system_prompt: str, user_prompt: str, max_tokens: int | None = None) -> int:
+    """Conservative token estimation for prompts and completions.
+
+    Code and diffs with symbols, syntax, and punctuation have higher token density
+    than plain English. On Groq's BPE tokenizer:
+    - Standard English: ~4 chars per token.
+    - Python code and diffs: ~2.8 - 3.2 chars per token.
+
+    We use a conservative ratio of 3.0 chars per token for prompt text plus 20 tokens
+    for framing/message overhead, plus expected completion tokens (clamped to realistic bounds).
+    """
+    prompt_len = len(system_prompt) + len(user_prompt)
+    prompt_tokens = max(1, int(prompt_len / 3.0) + 20)
+    completion_budget = max_tokens if max_tokens is not None else 4096
+    return prompt_tokens + completion_budget
+
+
+_token_limiter: TokenBucketLimiter | None = None
+
+
+def _get_token_limiter() -> TokenBucketLimiter:
+    """Lazily build the token limiter from settings (process-wide singleton)."""
+    global _token_limiter
+    with _throttle_state_lock:
+        if _token_limiter is None:
+            settings = get_settings()
+            _token_limiter = TokenBucketLimiter(
+                tpm_limit=settings.llm_tpm_limit,
+                safety_margin=settings.llm_tpm_safety_margin,
+            )
+            logger.debug(
+                "LLM token limiter initialised with TPM limit %d (safe %d)",
+                _token_limiter.tpm_limit,
+                _token_limiter.safe_tpm,
+            )
+        return _token_limiter
+
+
 def _get_call_gate() -> threading.Semaphore:
     """Lazily build the concurrency gate from settings (process-wide singleton)."""
     global _call_gate
@@ -102,11 +277,14 @@ def _get_call_gate() -> threading.Semaphore:
 
 
 def reset_throttle() -> None:
-    """Discard throttle state. For tests, and after a settings change."""
-    global _call_gate, _last_call_started_at
+    """Discard throttle and token limiter state. For tests, and after a settings change."""
+    global _call_gate, _last_call_started_at, _token_limiter
     with _throttle_state_lock:
         _call_gate = None
         _last_call_started_at = 0.0
+        if _token_limiter is not None:
+            _token_limiter.reset()
+        _token_limiter = None
 
 
 @contextmanager
@@ -136,6 +314,23 @@ def _throttled_call():
         gate.release()
 
 
+
+def _extract_retry_delay(exc: Exception | str) -> float | None:
+    """Extract recommended retry delay in seconds from error message, if present.
+
+    Supports formats such as:
+    - 'retry in 4.5s'
+    - 'Please try again in 18.62s.'
+    """
+    match = re.search(r"(?:retry in|try again in) ([\d\.]+)s", str(exc), re.IGNORECASE)
+    if match:
+        try:
+            return float(match.group(1))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 class LLMClient:
     """Typed, retry-aware wrapper around the Groq/Gemini chat completions API."""
 
@@ -151,6 +346,8 @@ class LLMClient:
     ) -> None:
         settings = get_settings()
         self.provider = settings.llm_provider.lower()
+        if self.provider not in {"groq", "gemini"}:
+            raise LLMConfigError("Unsupported LLM provider.")
         
         if self.provider == "gemini":
             self.model = model or settings.gemini_model
@@ -231,12 +428,38 @@ class LLMClient:
         if json_mode:
             create_kwargs["response_format"] = {"type": "json_object"}
 
-        with _throttled_call():
-            return self._complete_with_retries(create_kwargs)
+        # For open-weight reasoning models (e.g. openai/gpt-oss-120b),
+        # cap reasoning effort to 'low' so reasoning tokens do not exhaust max_tokens
+        # before the JSON document can be emitted.
+        if "gpt-oss" in self.model:
+            create_kwargs["reasoning_effort"] = "low"
 
-    def _complete_with_retries(self, create_kwargs: dict) -> str:
+        estimated_tokens = estimate_tokens(system_prompt, user_prompt, max_tokens)
+        limiter = _get_token_limiter()
+
+        with _throttled_call():
+            reservation_ts = uuid.uuid4().hex
+            limiter.acquire(estimated_tokens, reservation_id=reservation_ts)
+            return self._complete_with_retries(
+                create_kwargs,
+                estimated_tokens=estimated_tokens,
+                reservation_ts=reservation_ts,
+                limiter=limiter,
+            )
+
+    def _complete_with_retries(
+        self,
+        create_kwargs: dict,
+        estimated_tokens: int = 1000,
+        reservation_ts: float = 0.0,
+        limiter: TokenBucketLimiter | None = None,
+    ) -> str:
         """Issue the request, retrying transient failures with backoff."""
+        if limiter is None:
+            limiter = _get_token_limiter()
+
         last_transient: Exception | None = None
+        cumulative_rate_limit_wait: float = 0.0
         for attempt in range(self.max_retries + 1):
             try:
                 for gen_attempt in range(3):
@@ -252,23 +475,35 @@ class LLMClient:
                                 err_dict = exc.response.json().get("error", {})
                             else:
                                 err_dict = {}
-                                
+
                             if err_dict.get("code") == "json_validate_failed" and err_dict.get("failed_generation") == "":
                                 is_empty_gen = True
                         except Exception:
                             pass
-                            
+
                         if is_empty_gen and gen_attempt < 2:
+                            # Record prompt tokens consumed by Groq for this failed request
+                            # Keep the failed attempt's reservation conservatively;
+                            # every retry gets a separate reservation below.
+
+                            retry_delay = get_settings().llm_empty_generation_retry_delay
                             logger.warning(
-                                "LLM empty generation hallucination (attempt %d/3); retrying in 2.0s",
+                                "LLM empty generation hallucination (attempt %d/3); pacing and retrying in %.1fs",
                                 gen_attempt + 1,
+                                retry_delay,
                             )
-                            time.sleep(2.0)
+                            if retry_delay > 0:
+                                time.sleep(retry_delay)
+                            reservation_ts = uuid.uuid4().hex
+                            limiter.acquire(estimated_tokens, reservation_id=reservation_ts)
                             continue
-                        
+
                         # If not an empty generation, or retries exhausted, raise it up
                         raise LLMResponseError(f"request rejected as invalid: {exc}") from exc
-                        
+
+                actual_tokens = self._extract_total_tokens(response)
+                if actual_tokens is not None:
+                    limiter.reconcile(reservation_ts, estimated_tokens, actual_tokens)
                 return self._extract_content(response)
             except (AuthenticationError, PermissionDeniedError, openai.AuthenticationError, openai.PermissionDeniedError) as exc:
                 raise LLMAuthError(f"authentication failed: {exc}") from exc
@@ -276,24 +511,31 @@ class LLMClient:
                 last_transient = exc
                 if attempt < self.max_retries:
                     delay = self.backoff_base * (2**attempt)
-                    
+
                     if isinstance(exc, (RateLimitError, openai.RateLimitError)):
                         try:
                             if hasattr(exc, "response") and exc.response is not None:
                                 retry_after = exc.response.headers.get("retry-after")
                                 if retry_after is not None:
-                                    delay = max(delay, float(retry_after))
+                                    delay = max(delay, float(retry_after) + 1.0)
                         except Exception:
                             pass
-                        match = re.search(r"retry in ([\d\.]+)s", str(exc))
-                        if match:
-                            try:
-                                delay = max(delay, float(match.group(1)))
-                            except Exception:
-                                pass
-                                
-                    delay = min(delay, 30.0)
-                    
+                        parsed_delay = _extract_retry_delay(exc)
+                        if parsed_delay is not None:
+                            delay = max(delay, parsed_delay + 1.0)
+
+                        limiter.record_cooldown(delay)
+
+                        remaining_wait = MAX_RATE_LIMIT_WAIT - cumulative_rate_limit_wait
+                        if remaining_wait <= 0:
+                            raise LLMRateLimitError(
+                                f"rate limit wait cap ({MAX_RATE_LIMIT_WAIT}s) exceeded: {exc}"
+                            ) from exc
+                        delay = min(delay, remaining_wait)
+                        cumulative_rate_limit_wait += delay
+                    else:
+                        delay = min(delay, 30.0)
+
                     logger.warning(
                         "LLM transient error (attempt %d/%d): %s; retrying in %.2fs",
                         attempt + 1,
@@ -302,6 +544,8 @@ class LLMClient:
                         delay,
                     )
                     time.sleep(delay)
+                    reservation_ts = uuid.uuid4().hex
+                    limiter.acquire(estimated_tokens, reservation_id=reservation_ts)
                     continue
                 # Retries exhausted.
                 if isinstance(exc, (RateLimitError, openai.RateLimitError)):
@@ -318,6 +562,19 @@ class LLMClient:
         raise LLMServiceError(f"exhausted retries: {last_transient}")
 
     @staticmethod
+    def _extract_total_tokens(response: object) -> int | None:
+        """Pull the total token usage out of a chat completion response if present."""
+        try:
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                total = getattr(usage, "total_tokens", None)
+                if isinstance(total, int) and total > 0:
+                    return total
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
     def _extract_content(response: object) -> str:
         """Pull the assistant message text out of a chat completion response."""
         try:
@@ -327,17 +584,7 @@ class LLMClient:
             raise LLMResponseError(
                 f"malformed response structure: {exc}"
             ) from exc
-            
-        try:
-            tokens = response.usage.total_tokens
-            with open("llm_tokens.log", "a") as f:
-                f.write(f"{tokens}\n")
-        except Exception:
-            pass
 
         if not content or not str(content).strip():
-            with open("llm_debug_empty.txt", "w") as f:
-                f.write("RESPONSE OBJECT:\n")
-                f.write(repr(response))
             raise LLMResponseError("provider returned an empty completion")
         return str(content)

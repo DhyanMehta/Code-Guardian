@@ -133,7 +133,7 @@ class TestRunReviewAndPostCommentAuth:
             mock_get_gh.assert_called_once_with(112233)
             mock_gh.get_repo.assert_called_once_with("owner/repo")
             mock_repo.get_pull.assert_called_once_with(20)
-            mock_pr.create_issue_comment.assert_called_once_with("## Comment")
+            mock_pr.create_issue_comment.assert_called_once_with(f"<!-- codeguardian-review:{review.id} -->\n## Comment")
 
 
 
@@ -186,8 +186,8 @@ class TestStartReview:
                     result = start_review(db_session, review2)
 
         assert result is False
-        assert review2.status == "skipped"
-        assert "Another review is already running" in review2.summary
+        assert review2.status == "pending"
+        assert "Waiting for the running review" in review2.summary
 
 
 class TestPersistFindings:
@@ -242,7 +242,7 @@ class TestPersistFindings:
 class TestBuildSummary:
     def test_no_findings(self):
         report = AggregatedReport(findings=[], agent_statuses=[])
-        assert _build_summary(report) == "No issues found."
+        assert _build_summary(report) == "No findings in completed checks; review incomplete."
 
     def test_with_findings(self):
         report = AggregatedReport(
@@ -273,7 +273,7 @@ class TestBuildSummary:
                 AgentStatus(name="documentation", outcome=AgentOutcome.OK),
             ],
         )
-        assert _build_summary(report) == "No issues found."
+        assert _build_summary(report) == "No findings in completed checks; review incomplete."
 
         report.findings.append(
             UnifiedFinding(agent="security", severity=Severity.HIGH, title="a", detail="")
@@ -414,7 +414,7 @@ class TestRunReview:
 
         db_session.refresh(review)
         assert review.status == "failed"
-        assert "clone failed" in review.summary
+        assert "RuntimeError" in review.summary
 
     def test_nonexistent_review(self, db_session):
         # Should not raise, just log
@@ -589,7 +589,7 @@ class TestPersistAgentRuns:
 
 
 class TestCompletedAt:
-    def test_skipped_review_gets_a_terminal_timestamp(self, db_session):
+    def test_waiting_review_remains_nonterminal(self, db_session):
         from sqlalchemy.exc import IntegrityError
 
         review = create_review(
@@ -609,8 +609,8 @@ class TestCompletedAt:
                 with patch.object(db_session, "merge", return_value=review):
                     start_review(db_session, review)
 
-        assert review.status == "skipped"
-        assert review.completed_at is not None
+        assert review.status == "pending"
+        assert review.completed_at is None
 
     def test_stale_sweep_sets_completed_at(self, db_session):
         review = create_review(
@@ -625,3 +625,111 @@ class TestCompletedAt:
         db_session.refresh(review)
         assert review.status == "failed"
         assert review.completed_at is not None
+
+
+class TestMultiCommitPRDiff:
+    """Regression tests proving diff scoping covers arbitrary commit counts (3+)."""
+
+    def _setup_multi_commit_repo(self, tmp_path):
+        import os
+        import subprocess
+
+        repo_dir = str(tmp_path / "repo")
+        os.makedirs(repo_dir, exist_ok=True)
+
+        def git(*args):
+            res = subprocess.run(
+                ["git", *args],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return res.stdout.strip()
+
+        git("init", "-b", "main")
+        git("config", "user.name", "Test User")
+        git("config", "user.email", "test@example.com")
+
+        # Initial commit on main (base)
+        with open(os.path.join(repo_dir, "base.txt"), "w") as f:
+            f.write("base\n")
+        git("add", "base.txt")
+        git("commit", "-m", "Initial commit")
+        base_sha = git("rev-parse", "HEAD")
+
+        # Feature branch with 4 separate commits (3+)
+        git("checkout", "-b", "feature")
+
+        for i in range(1, 5):
+            fname = f"feature{i}.py"
+            with open(os.path.join(repo_dir, fname), "w") as f:
+                f.write(f"def func_{i}():\n    return {i}\n")
+            git("add", fname)
+            git("commit", "-m", f"Add commit {i}")
+
+        head_sha = git("rev-parse", "HEAD")
+        return repo_dir, base_sha, head_sha
+
+    def test_multi_commit_pr_diff_and_changed_files_with_base_sha(self, tmp_path):
+        from backend.services.review_service import _get_changed_files, _get_diff
+
+        repo_dir, base_sha, head_sha = self._setup_multi_commit_repo(tmp_path)
+
+        # Baseline: without base_sha (old HEAD~1 behavior), only the 4th commit is seen
+        with pytest.raises(RuntimeError, match="merge base"):
+            _get_changed_files(repo_dir)
+
+        # Fix: with base_sha, all 4 commits are included
+        changed = _get_changed_files(repo_dir, base_sha=base_sha)
+        assert sorted(changed) == ["feature1.py", "feature2.py", "feature3.py", "feature4.py"]
+
+        diff = _get_diff(repo_dir, base_sha=base_sha)
+        assert "feature1.py" in diff
+        assert "feature2.py" in diff
+        assert "feature3.py" in diff
+        assert "feature4.py" in diff
+
+    def test_multi_commit_pr_fallback_to_base_ref(self, tmp_path):
+        from backend.services.review_service import _get_changed_files, _get_diff
+
+        repo_dir, base_sha, head_sha = self._setup_multi_commit_repo(tmp_path)
+
+        # With base_ref="main" and no base_sha
+        changed = _get_changed_files(repo_dir, base_ref="main")
+        assert sorted(changed) == ["feature1.py", "feature2.py", "feature3.py", "feature4.py"]
+
+        diff = _get_diff(repo_dir, base_ref="main")
+        assert "feature1.py" in diff
+        assert "feature4.py" in diff
+
+    def test_fork_pr_diff_and_changed_files(self, tmp_path):
+        from backend.services.review_service import _get_changed_files, _get_diff
+
+        repo_dir, base_sha, head_sha = self._setup_multi_commit_repo(tmp_path)
+
+        # In a fork PR, the PR is based on base_sha from upstream main, but with head_sha on fork.
+        # Direct base_sha matching should find all 4 changed files across the fork commits.
+        fork_changed = _get_changed_files(repo_dir, base_sha=base_sha, base_ref="main")
+        assert sorted(fork_changed) == ["feature1.py", "feature2.py", "feature3.py", "feature4.py"]
+
+        fork_diff = _get_diff(repo_dir, base_sha=base_sha, base_ref="main")
+        assert "feature1.py" in fork_diff
+        assert "feature4.py" in fork_diff
+
+        # If base_sha is unreachable (simulating unadvertised commit on git host),
+        # merge-base on base_ref="main" must still find all 4 changed files.
+        fallback_changed = _get_changed_files(repo_dir, base_sha="deadbeef" * 5, base_ref="main")
+        assert sorted(fallback_changed) == ["feature1.py", "feature2.py", "feature3.py", "feature4.py"]
+
+    def test_create_review_stores_base_sha_and_base_ref(self, db_session):
+        review = create_review(
+            db_session,
+            repo_full_name="owner/repo",
+            pr_number=99,
+            head_sha="head123",
+            base_sha="base456",
+            base_ref="main",
+        )
+        assert review.base_sha == "base456"
+        assert review.base_ref == "main"

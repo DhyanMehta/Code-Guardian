@@ -1,25 +1,61 @@
 # CodeGuardian AI — local development stack.
-# LOCAL DEV ONLY: the webhook endpoint uses HMAC signature verification but the stack
-# has no other auth/TLS. Do not expose these services to the public internet.
+# LOCAL DEV ONLY: this stack has no TLS termination. Dashboard endpoints require
+# user authentication and webhooks require HMAC signatures.
 
 services:
-  backend:
+  backend: &backend
     build:
       context: .
       dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
     environment:
-      # Point at the compose Postgres/Chroma services (overrides .env host values).
+      # Use Compose PostgreSQL and the shared local Chroma volume.
       DATABASE_URL: postgresql+psycopg2://guardian:guardian@postgres:5432/codeguardian
       CHROMA_PERSIST_DIR: /app/chroma_db
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-0}
+      GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID:-}
+      GITHUB_APP_CLIENT_SECRET: ${GITHUB_APP_CLIENT_SECRET:-}
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      LLM_PROVIDER: ${LLM_PROVIDER:-groq}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-20b}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      REVIEW_TIMEOUT_SECONDS: ${REVIEW_TIMEOUT_SECONDS:-900}
+      MAX_REVIEW_ATTEMPTS: ${MAX_REVIEW_ATTEMPTS:-2}
+      WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-2}
+      LEGACY_PAT_ENABLED: ${LEGACY_PAT_ENABLED:-false}
+      LLM_TPM_LIMIT: ${LLM_TPM_LIMIT:-8000}
+    volumes:
+      - chroma_data:/app/chroma_db
+      - ${GITHUB_APP_PRIVATE_KEY_PATH:-./github-app.pem}:/run/secrets/github-app.pem:ro
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
+
+  worker:
+    <<: *backend
+    ports: []
+    command: ["python", "-m", "backend.worker"]
+
+  migrate:
+    <<: *backend
+    ports: []
+    command: ["python", "-m", "backend.bootstrap"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   postgres:
     image: postgres:16-alpine
@@ -36,14 +72,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-
-  chromadb:
-    image: chromadb/chroma:1.5.9
-    ports:
-      - "8001:8000"
-    volumes:
-      - chroma_data:/data
-    restart: unless-stopped
 
 volumes:
   postgres_data:

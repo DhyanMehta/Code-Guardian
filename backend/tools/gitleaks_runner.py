@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 SCANNER = "gitleaks"
 DEFAULT_TIMEOUT = 300
 _SECRET_SEVERITY = Severity.HIGH
-_DOCKER_IMAGE = "zricethezav/gitleaks:latest"
+_DOCKER_IMAGE = "zricethezav/gitleaks:v8.18.4"
 _DOCKER_MOUNT = "/src"
 
 

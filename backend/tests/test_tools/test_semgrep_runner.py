@@ -105,3 +105,23 @@ def test_run_process_real_missing_binary() -> None:
 
     with pytest.raises(ScannerNotFoundError):
         run_process("semgrep", ["definitely-not-a-real-binary-xyz"], timeout=5)
+
+
+def test_run_docker_fallback_on_output_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Proves Docker fallback triggers when native semgrep fails with ScannerOutputError."""
+    calls = []
+
+    def _mock_run_native(*a, **k):
+        raise ScannerOutputError("semgrep", "empty output (expected JSON document)")
+
+    def _mock_run_docker(*a, **k):
+        calls.append("docker")
+        return []
+
+    monkeypatch.setattr(semgrep_runner, "_run_native", _mock_run_native)
+    monkeypatch.setattr(semgrep_runner, "_run_docker", _mock_run_docker)
+    monkeypatch.setattr(semgrep_runner.shutil, "which", lambda x: "/usr/bin/docker")
+
+    findings = semgrep_runner.run("some/path")
+    assert findings == []
+    assert calls == ["docker"]

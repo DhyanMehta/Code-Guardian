@@ -7,7 +7,7 @@ signatures are rejected with 401.
 Session 8 extends the handler to branch on event type:
 - ``installation`` events create/update/deactivate Installation rows.
 - ``pull_request`` events resolve the installation from the payload, create a
-  scoped Review row, and dispatch the review in a background task (202).
+  scoped pending Review row for the durable worker (202).
 - All other event types are accepted (200) but ignored.
 """
 
@@ -24,8 +24,8 @@ from sqlalchemy.orm import Session
 
 from backend.config import get_settings
 from backend.db.database import get_db
-from backend.db.models import Installation
-from backend.services.review_service import create_review, run_review
+from backend.db.models import Installation, User
+from backend.services.review_service import create_review
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +63,9 @@ def _handle_installation_event(
     rather than hard-deleted because reviews hold a FK reference.
     """
     action = event.get("action", "")
-    inst = event.get("installation", {})
+    inst = event.get("installation") or {}
     installation_id = inst.get("id")
-    account = inst.get("account", {})
+    account = inst.get("account") or {}
 
     if not installation_id:
         logger.warning("Installation event has no installation.id; ignoring.")
@@ -109,6 +109,8 @@ def _handle_installation_event(
         if row:
             row.suspended_at = _utcnow()
             db.commit()
+            from backend.tools.github_app import invalidate_installation
+            invalidate_installation(installation_id)
             logger.info("Installation %d suspended.", installation_id)
         else:
             logger.info(
@@ -158,8 +160,8 @@ def _handle_installation_event(
 
 def _resolve_installation(
     event: dict, db: Session
-) -> int | None:
-    """Extract and validate ``installation.id`` from a webhook payload.
+) -> Installation | None:
+    """Extract and validate the Installation from a webhook payload.
 
     If the installation is not yet in the DB, auto-creates it (the ``created``
     webhook may have been missed, e.g. the app was installed before this code
@@ -205,7 +207,7 @@ def _resolve_installation(
         )
         return None
 
-    return installation_id
+    return row
 
 
 # --------------------------------------------------------------------------- #
@@ -220,6 +222,7 @@ async def github_webhook(
     db: Session = Depends(get_db),
     x_hub_signature_256: str | None = Header(default=None),
     x_github_event: str | None = Header(default=None),
+    x_github_delivery: str | None = Header(default=None),
 ) -> dict[str, str | int]:
     """Receive a GitHub webhook delivery.
 
@@ -258,14 +261,43 @@ async def github_webhook(
             detail="Request body is not valid JSON.",
         ) from exc
 
+    if not isinstance(event, dict):
+        raise HTTPException(400, "Webhook must be an object.")
+    def object_field(parent, key):
+        value = parent.get(key)
+        if value is not None and not isinstance(value, dict):
+            raise HTTPException(400, f"Invalid webhook object: {key}.")
+        return value or {}
+    installation = object_field(event, "installation")
+    if installation and (type(installation.get("id")) is not int or installation["id"] <= 0):
+        raise HTTPException(400, "Invalid installation ID.")
+    object_field(installation, "account")
+    object_field(event, "sender")
+    repository = object_field(event, "repository")
+    pull_request = object_field(event, "pull_request")
+    head = object_field(pull_request, "head")
+    base = object_field(pull_request, "base")
+    object_field(head, "repo")
+    if x_github_event == "github_app_authorization" and event.get("action") == "revoked":
+        sender_id = (event.get("sender") or {}).get("id")
+        user = db.query(User).filter_by(github_user_id=sender_id).first() if sender_id else None
+        if user:
+            user.access_token_enc = None
+            user.refresh_token_enc = None
+            user.session_version += 1
+            user.installation_links.clear()
+            db.commit()
+        return {"status": "processed"}
     # ----- Branch on event type -----
 
     if x_github_event == "installation":
         return _handle_installation_event(event, db)
 
     if x_github_event == "installation_repositories":
-        logger.info("Webhook: installation_repositories event received; no action taken.")
-        return {"status": "ignored", "reason": "installation_repositories not handled"}
+        from backend.tools.github_app import invalidate_installation
+        if installation:
+            invalidate_installation(installation["id"])
+        return {"status": "processed", "reason": "repository permissions are checked live"}
 
     if x_github_event != "pull_request":
         logger.info("Webhook ignored: event type '%s' is not handled.", x_github_event)
@@ -278,19 +310,25 @@ async def github_webhook(
         logger.info("Webhook ignored: pull_request action '%s' not reviewable.", action)
         return {"status": "ignored", "reason": f"unhandled action '{action}'"}
 
-    pr = event.get("pull_request", {})
-    repo_full_name = event.get("repository", {}).get("full_name", "")
+    pr = event.get("pull_request") or {}
+    repo_full_name = repository.get("full_name", "")
     pr_number = pr.get("number", 0)
-    head_sha = pr.get("head", {}).get("sha", "")
+    head_sha = head.get("sha", "")
+    base_sha = base.get("sha", "")
+    base_ref = base.get("ref", "")
 
     # Detect fork PRs
-    head_repo = pr.get("head", {}).get("repo", {}).get("full_name", "")
+    head_repo = (head.get("repo") or {}).get("full_name", "")
     is_fork = head_repo != "" and head_repo != repo_full_name
+    if not isinstance(repo_full_name, str) or len(repo_full_name.split("/")) != 2 or not all(repo_full_name.split("/")) or type(pr_number) is not int or pr_number <= 0 or not isinstance(head_sha, str) or not head_sha or head_sha.startswith("-"):
+        raise HTTPException(400, "Repository, PR number and head SHA are required.")
+    if not isinstance(base_sha, str) or not isinstance(base_ref, str):
+        raise HTTPException(400, "Invalid PR base information.")
 
     # Resolve the installation from the payload (Session 8).
-    installation_id = _resolve_installation(event, db)
+    inst = _resolve_installation(event, db)
 
-    if installation_id is None and event.get("installation"):
+    if inst is None and event.get("installation"):
         # The payload had an installation block but it resolved to None
         # (suspended or uninstalled). Reject without creating a review.
         return {
@@ -298,30 +336,38 @@ async def github_webhook(
             "reason": "installation is suspended or removed",
         }
 
+    if inst is not None and inst.review_mode == "manual":
+        logger.info(
+            "Webhook skipped review for PR #%d on %s: installation %d review_mode is 'manual'.",
+            pr_number,
+            repo_full_name,
+            inst.id,
+        )
+        return {
+            "status": "ignored",
+            "reason": "installation review_mode is manual",
+            "installation_id": inst.id,
+        }
+
+    installation_id = inst.id if inst else None
+    if installation_id is None and not settings.legacy_pat_enabled:
+        raise HTTPException(400, "GitHub App installation is required.")
+
     review = create_review(
         db,
         repo_full_name=repo_full_name,
         pr_number=pr_number,
         head_sha=head_sha,
+        base_sha=base_sha,
+        base_ref=base_ref,
         is_fork=is_fork,
         installation_id=installation_id,
+        delivery_id=x_github_delivery,
     )
-
-    from backend.db.database import get_sessionmaker
-    session_factory = get_sessionmaker()
-
-    def _background_review(review_id: int, inst_id: int | None) -> None:
-        session = session_factory()
-        try:
-            run_review(session, review_id, installation_id=inst_id)
-        finally:
-            session.close()
-
-    background_tasks.add_task(_background_review, review.id, installation_id)
 
     logger.info(
         "Accepted pull_request '%s' for %s#%d (review_id=%d, installation_id=%s). "
-        "Dispatching background review.",
+        "Queued durable review.",
         action,
         repo_full_name,
         pr_number,

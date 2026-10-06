@@ -101,7 +101,7 @@ class TestCheckoutPrOffline:
 
             try:
                 workspace._run_git(
-                    ["git", "clone", "--depth=1", repo_full_name, tmp_dir],
+                    ["git", "clone", "--depth=1000", repo_full_name, tmp_dir],
                     timeout=timeout,
                     context="clone",
                 )
@@ -142,7 +142,7 @@ class TestCheckoutPrOffline:
         ws = WorkspaceContext(path=tmp_dir)
 
         workspace._run_git(
-            ["git", "clone", "--depth=1", repo_path, tmp_dir],
+            ["git", "clone", "--depth=1000", repo_path, tmp_dir],
             timeout=60,
             context="clone",
         )
@@ -203,9 +203,46 @@ class TestCheckoutPrErrorCases:
         repo_path, sha = local_bare_repo
         # Use _run_git directly to test timeout propagation
         workspace._run_git(
-            ["git", "clone", "--depth=1", repo_path, str(local_bare_repo[0]) + "_clone"],
+            ["git", "clone", "--depth=1000", repo_path, str(local_bare_repo[0]) + "_clone"],
             timeout=42,
             context="test",
         )
 
         assert 42 in calls
+
+    def test_checkout_pr_fork_base_sha_and_base_ref_fallback(self, monkeypatch) -> None:
+        """Verify checkout_pr handles fork PRs with base_sha and falls back to base_ref."""
+        from backend.tools import workspace
+        from unittest.mock import MagicMock
+
+        executed_commands: list[list[str]] = []
+
+        def _fake_run_git(command: list[str], *, timeout: int, cwd: str | None = None, context: str = ""):
+            executed_commands.append(command)
+            # Simulate failure when fetching base_sha directly
+            if context == "fetch base SHA":
+                raise workspace.WorkspaceError("fatal: couldn't find remote ref base_sha_xyz")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(workspace, "_run_git", _fake_run_git)
+
+        with workspace.checkout_pr(
+            "upstream-owner/repo",
+            "head_sha_abc",
+            "fake-token",
+            base_sha="base_sha_xyz",
+            base_ref="main",
+        ) as ws:
+            assert ws.path is not None
+
+        contexts = [cmd for cmd in executed_commands]
+        # 1. Clone with depth 1
+        assert contexts[0][:3] == ["git", "clone", "--depth=1000"]
+        # 2. Fetch head_sha
+        assert contexts[1][:5] == ["git", "fetch", "--depth=1000", "origin", "head_sha_abc"]
+        # 3. Attempt to fetch base_sha
+        assert contexts[2][:5] == ["git", "fetch", "--depth=1000", "origin", "base_sha_xyz"]
+        # 4. Fallback fetch base_ref with depth 50
+        assert contexts[3][:5] == ["git", "fetch", "--depth=1000", "origin", "main:refs/remotes/origin/main"]
+        # 5. Checkout head_sha
+        assert contexts[4][:3] == ["git", "checkout", "head_sha_abc"]

@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
+from backend.tools.git_auth import git_auth, git_environment
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +57,20 @@ def _force_remove_readonly(func, path, _exc_info):
 
 
 @contextmanager
-def checkout_pr(
+def checkout_pr(repo_full_name, head_sha, github_token, **kwargs):
+    with git_auth(github_token):
+        with _checkout_pr(repo_full_name, head_sha, github_token, **kwargs) as workspace:
+            yield workspace
+
+
+@contextmanager
+def _checkout_pr(
     repo_full_name: str,
     head_sha: str,
     github_token: str,
     *,
+    base_sha: str | None = None,
+    base_ref: str | None = None,
     timeout: int = DEFAULT_CLONE_TIMEOUT,
 ) -> Iterator[WorkspaceContext]:
     """Clone a repo at a specific SHA into a temp directory.
@@ -80,22 +90,53 @@ def checkout_pr(
             "repo_full_name, head_sha, and github_token are all required."
         )
 
-    clone_url = f"https://x-access-token:{github_token}@github.com/{repo_full_name}.git"
+    clone_url = f"https://github.com/{repo_full_name}.git"
     tmp_dir = tempfile.mkdtemp(prefix="codeguardian_")
     ws = WorkspaceContext(path=tmp_dir)
 
     try:
+        depth = 1000 if (base_sha or base_ref) else CLONE_DEPTH
         _run_git(
-            ["git", "clone", f"--depth={CLONE_DEPTH}", clone_url, tmp_dir],
+            ["git", "clone", f"--depth={depth}", clone_url, tmp_dir],
             timeout=timeout,
             context="clone",
         )
         _run_git(
-            ["git", "fetch", f"--depth={CLONE_DEPTH}", "origin", head_sha],
+            ["git", "fetch", f"--depth={depth}", "origin", head_sha],
             timeout=timeout,
             cwd=tmp_dir,
             context="fetch SHA",
         )
+        if base_sha:
+            try:
+                _run_git(
+                    ["git", "fetch", f"--depth={depth}", "origin", base_sha],
+                    timeout=timeout,
+                    cwd=tmp_dir,
+                    context="fetch base SHA",
+                )
+            except WorkspaceError as exc:
+                if base_ref:
+                    logger.warning(
+                        "Direct fetch of base_sha %s failed (%s); falling back to fetching base_ref %s",
+                        base_sha, exc, base_ref
+                    )
+                    _run_git(
+                        ["git", "fetch", f"--depth={depth}", "origin", f"{base_ref}:refs/remotes/origin/{base_ref}"],
+                        timeout=timeout,
+                        cwd=tmp_dir,
+                        context="fetch base ref fallback",
+                    )
+                else:
+                    raise
+        elif base_ref:
+            _run_git(
+                ["git", "fetch", f"--depth={depth}", "origin", f"{base_ref}:refs/remotes/origin/{base_ref}"],
+                timeout=timeout,
+                cwd=tmp_dir,
+                context="fetch base ref",
+            )
+
         _run_git(
             ["git", "checkout", head_sha],
             timeout=timeout,
@@ -128,6 +169,7 @@ def _run_git(
             timeout=timeout,
             cwd=cwd,
             check=False,
+            env=git_environment(),
         )
     except FileNotFoundError as exc:
         raise WorkspaceError(

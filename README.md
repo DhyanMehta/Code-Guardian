@@ -11,7 +11,7 @@ engineering rules, and [`ENDPOINTS.md`](ENDPOINTS.md) for the API contract.
 ## How it works
 
 ```
-GitHub PR event → FastAPI webhook → Supervisor Agent (LangGraph)
+GitHub PR event → FastAPI webhook → PostgreSQL queue → Worker → Supervisor (LangGraph)
                                         │ parallel fan-out
               ┌─────────────┬───────────┼───────────┐
               ▼             ▼           ▼           ▼
@@ -77,7 +77,9 @@ copy .env.example .env      # then edit .env and fill in real values
 
 Required keys (see `.env.example` for descriptions):
 - `GROQ_API_KEY` — Groq API key for LLM triage/explanation
-- `GITHUB_TOKEN` — GitHub token with repo read/write access
+- `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` — GitHub App credentials
+- `SESSION_SECRET` — dashboard session signing key
+- `TOKEN_ENCRYPTION_KEY` — stable Fernet key for encrypted user credentials
 - `GITHUB_WEBHOOK_SECRET` — shared HMAC secret for webhook verification
 - `DATABASE_URL` — PostgreSQL connection string
 - `CHROMA_PERSIST_DIR` — path for ChromaDB vector store persistence
@@ -89,9 +91,32 @@ URL — change it here if the backend runs on a different port.
 
 ## Run the backend (venv active)
 
+Apply migrations and initialize default standards first:
+
+```powershell
+python -m backend.bootstrap
+```
+
+Generate a Fernet key once with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+and save it as `TOKEN_ENCRYPTION_KEY` in your local `.env`. Keep that key stable;
+changing it makes existing encrypted GitHub credentials unreadable. Existing users
+must sign in again after upgrading from the old token-free schema.
+
 ```powershell
 uvicorn backend.main:app --host 127.0.0.1 --port 8080 --reload
 ```
+
+In a second terminal, activate the same venv and run the durable worker:
+
+```powershell
+backend\venv\Scripts\Activate.ps1
+(Get-Command python).Source
+python -m backend.worker
+```
+
+The API only queues reviews. A worker is required for analysis and delivery retries.
+See [backend reliability and verification](docs/BACKEND_RELIABILITY.md) for the
+updated flow, compatibility changes, and validation commands.
 - Liveness:  `GET http://localhost:8080/health/live`
 - Readiness: `GET http://localhost:8080/health/ready`
 - Webhook:   `POST http://localhost:8080/webhooks/github`
@@ -111,15 +136,23 @@ agent status + auto-fix panel), and code-health trends.
 ```bash
 docker compose up --build
 ```
-Brings up three services: `backend` (FastAPI, port 8000), `postgres` (port 5432), and
-`chromadb` (port 8001). The backend image bundles Semgrep, Bandit, and the Gitleaks
-binary.
+Starts `postgres`, a one-shot `migrate` initializer, `backend` (port 8000), and
+`worker`. API and worker share a persistent Chroma volume. Chroma runs embedded;
+there is no separate Chroma server. Mount the GitHub App private key using
+`GITHUB_APP_PRIVATE_KEY_PATH`. The backend image bundles the three scanners.
 
 ## Run tests
 
 ```powershell
-# Backend (324 tests)
+# Backend
 pytest backend/tests
+
+# Real PostgreSQL migration and worker checks, using disposable schemas
+$env:CODEGUARDIAN_TEST_POSTGRES="1"
+pytest backend/tests -o addopts= --tb=short
+
+# Installed scanners and read-only external integration diagnostics
+python -m scripts.verify_backend_runtime --github --llm
 
 # Frontend
 cd frontend && npm test

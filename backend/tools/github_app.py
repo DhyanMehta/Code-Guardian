@@ -108,7 +108,7 @@ def get_integration() -> GithubIntegration:
             return _integration
 
         app_auth = get_app_auth()
-        _integration = GithubIntegration(auth=app_auth)
+        _integration = GithubIntegration(auth=app_auth, timeout=15)
         return _integration
 
 

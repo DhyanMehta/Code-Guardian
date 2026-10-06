@@ -12,14 +12,20 @@ import logging
 import os
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+import ast
+import hashlib
+from pathlib import Path
+from dataclasses import dataclass, field, asdict
 from typing import Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from backend.agents._validation import validate_drafted_docstring, validate_drafted_test
+from backend.agents._validation import find_function, safe_workspace_path
 from backend.config import get_settings
-from backend.db.models import Finding, Review
+from backend.db.models import Finding, Review, User
+from sqlalchemy import update, text
+from backend.tools.git_auth import git_auth, git_environment
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +55,25 @@ class AutofixError(Exception):
     """Raised when autofix cannot proceed."""
 
 
-def create_autofix(db: Session, review_id: int) -> AutofixResult:
+def create_autofix(db: Session, review_id: int, *, user: User | None = None) -> AutofixResult:
+    """Serialize branch creation across processes; reconcile interrupted pushes."""
+    engine = db.get_bind()
+    if engine.dialect.name != "postgresql":
+        return _create_autofix(db, review_id, user=user)
+    with engine.connect() as lock:
+        if not lock.execute(text("SELECT pg_try_advisory_lock(79301, :id)"), {"id": review_id}).scalar():
+            raise AutofixError("Auto-fix already exists or is being created.")
+        try:
+            review = db.get(Review, review_id)
+            if review and review.autofix_status == "creating":
+                review.autofix_status = "failed"
+                db.commit()
+            return _create_autofix(db, review_id, user=user)
+        finally:
+            lock.execute(text("SELECT pg_advisory_unlock(79301, :id)"), {"id": review_id})
+
+
+def _create_autofix(db: Session, review_id: int, *, user: User | None = None) -> AutofixResult:
     """Create an auto-fix branch with validated fixes.
 
     Returns the result with applied/skipped counts. Raises AutofixError if the
@@ -72,11 +96,30 @@ def create_autofix(db: Session, review_id: int) -> AutofixResult:
             "the review comment."
         )
 
-    if review.autofix_status == "pending_approval":
+    if review.autofix_status in ("creating", "pending_approval", "approved", "rejected"):
         raise AutofixError(
             f"Auto-fix branch already exists for review {review_id} "
             f"(branch: {review.autofix_branch}). Approve or reject it first."
         )
+
+    if user and review.autofix_commit_sha and review.autofix_branch:
+        from backend.services.authorization import user_github, require_repo
+        from github import GithubException
+        require_repo(user, review.installation_id, review.repo_full_name, write=True)
+        try:
+            branch = user_github(user).get_repo(review.repo_full_name).get_branch(review.autofix_branch)
+        except GithubException as exc:
+            if exc.status != 404:
+                raise AutofixError("Could not reconcile the previous branch push.") from exc
+        else:
+            if branch.commit.sha != review.autofix_commit_sha:
+                raise AutofixError("Auto-fix branch changed; refusing to overwrite it.")
+            review.autofix_status = "pending_approval"
+            review.autofix_error = None
+            db.commit()
+            return AutofixResult(branch=review.autofix_branch,
+                applied_fixes=[AppliedFix(**item) for item in json.loads(review.autofix_applied_fixes or "[]")],
+                skipped_fixes=[SkippedFix(item["target_function"], item["target_file"], item["reason"]) for item in json.loads(review.autofix_skipped_fixes or "[]")])
 
     # Gather fixable findings
     fixable_findings = (
@@ -88,7 +131,14 @@ def create_autofix(db: Session, review_id: int) -> AutofixResult:
     if not fixable_findings:
         raise AutofixError(f"Review {review_id} has no fixable findings.")
 
-    if review.installation_id:
+    if user:
+        from backend.services.authorization import user_token, user_github, require_repo
+        require_repo(user, review.installation_id, review.repo_full_name, write=True)
+        head = user_github(user).get_repo(review.repo_full_name).get_pull(review.pr_number).head.sha
+        if head != review.commit_sha:
+            raise AutofixError("PR head changed; run a new review before creating fixes.")
+        token = user_token(user)
+    elif review.installation_id:
         from backend.tools.github_app import get_installation_token
         token = get_installation_token(review.installation_id)
     else:
@@ -96,26 +146,37 @@ def create_autofix(db: Session, review_id: int) -> AutofixResult:
         token = settings.require("github_token")
 
     branch_name = f"codeguardian/autofix/{review_id}"
-
-    result = _apply_fixes_and_push(
-        review=review,
-        findings=fixable_findings,
-        branch_name=branch_name,
-        token=token,
-    )
+    claimed = db.execute(update(Review).where(Review.id == review_id, (Review.autofix_status.is_(None)) | (Review.autofix_status == "failed")).values(autofix_status="creating"))
+    db.commit()
+    if not claimed.rowcount:
+        raise AutofixError("Auto-fix already exists or is being created.")
+    try:
+        result = _apply_fixes_and_push(review=review, findings=fixable_findings, branch_name=branch_name, token=token)
+    except Exception as exc:
+        db.rollback()
+        review = db.get(Review, review_id)
+        review.autofix_status = "failed"
+        review.autofix_error = f"Auto-fix failed ({type(exc).__name__})."
+        db.commit()
+        raise AutofixError(review.autofix_error) from exc
 
     if not result.applied_fixes:
+        review.autofix_status = "failed"
+        review.autofix_error = "All fixes failed validation."
+        db.commit()
         raise AutofixError(
             "All fixes failed re-validation against current code. "
             "The PR may have been updated since the review."
         )
 
     review.autofix_status = "pending_approval"
+    review.autofix_error = None
     review.autofix_branch = branch_name
     # Persist the outcome detail, not just the status. The applied/skipped split is
     # the evidence that apply-time re-validation rejected unusable fixes, and
     # returning it only in this response meant it vanished on the next page load.
     review.autofix_applied_count = len(result.applied_fixes)
+    review.autofix_applied_fixes = json.dumps([asdict(item) for item in result.applied_fixes])
     review.autofix_skipped_fixes = json.dumps([
         {
             "target": f"{s.target_file}:{s.target_function}",
@@ -135,6 +196,7 @@ def approve_autofix(
     db: Session,
     review_id: int,
     approved_by: str,
+    *, user: User | None = None,
 ) -> None:
     """Record explicit human approval for an auto-fix branch.
 
@@ -152,9 +214,18 @@ def approve_autofix(
             "Only 'pending_approval' reviews can be approved."
         )
 
-    review.autofix_status = "approved"
-    review.autofix_approved_by = approved_by
-    review.autofix_approved_at = datetime.now(timezone.utc)
+    if user and review.autofix_commit_sha:
+        from backend.services.authorization import user_github
+        try:
+            actual = user_github(user).get_repo(review.repo_full_name).get_branch(review.autofix_branch).commit.sha
+        except Exception as exc:
+            raise AutofixError("Could not verify the auto-fix branch before approval.") from exc
+        if actual != review.autofix_commit_sha:
+            raise AutofixError("Auto-fix branch changed; the recorded commit cannot be approved.")
+    claimed = db.execute(update(Review).where(Review.id == review_id, Review.autofix_status == "pending_approval").values(autofix_status="approved", autofix_approved_by=approved_by, autofix_approved_at=datetime.now(timezone.utc)))
+    if not claimed.rowcount:
+        db.rollback()
+        raise AutofixError("Auto-fix decision was already recorded.")
     db.commit()
 
 
@@ -170,7 +241,10 @@ def reject_autofix(db: Session, review_id: int) -> None:
             "Only 'pending_approval' reviews can be rejected."
         )
 
-    review.autofix_status = "rejected"
+    claimed = db.execute(update(Review).where(Review.id == review_id, Review.autofix_status == "pending_approval").values(autofix_status="rejected"))
+    if not claimed.rowcount:
+        db.rollback()
+        raise AutofixError("Auto-fix decision was already recorded.")
     db.commit()
 
 
@@ -183,8 +257,8 @@ def _apply_fixes_and_push(
     """Clone, apply fixes with re-validation, commit, and push."""
     result = AutofixResult()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        repo_url = f"https://x-access-token:{token}@github.com/{review.repo_full_name}.git"
+    with tempfile.TemporaryDirectory() as tmpdir, git_auth(token):
+        repo_url = f"https://github.com/{review.repo_full_name}.git"
         workspace = os.path.join(tmpdir, "repo")
 
         try:
@@ -205,12 +279,32 @@ def _apply_fixes_and_push(
 
         # Commit and push
         try:
-            _run_git(["add", "-A"], cwd=workspace)
+            changed = _run_git(["diff", "--name-only"], cwd=workspace).stdout.splitlines()
+            untracked = _run_git(["ls-files", "--others", "--exclude-standard"], cwd=workspace).stdout.splitlines()
+            for name in changed + untracked:
+                path = safe_workspace_path(workspace, name)
+                if path.suffix == ".py":
+                    ast.parse(path.read_text(encoding="utf-8"))
+            _run_git(["add", "--", *(changed + untracked)], cwd=workspace)
             _run_git(
-                ["commit", "-m", f"codeguardian: auto-fix for review #{review.id}"],
+                ["-c", "user.name=CodeGuardian", "-c", "user.email=codeguardian@users.noreply.github.com", "commit", "-m", f"codeguardian: auto-fix for review #{review.id}"],
                 cwd=workspace,
             )
-            _run_git(["push", "origin", branch_name], cwd=workspace)
+            review.autofix_commit_sha = _run_git(["rev-parse", "HEAD"], cwd=workspace).stdout.strip()
+            review.autofix_branch = branch_name
+            review.autofix_applied_count = len(result.applied_fixes)
+            review.autofix_applied_fixes = json.dumps([asdict(item) for item in result.applied_fixes])
+            review.autofix_skipped_fixes = json.dumps([asdict(item) for item in result.skipped_fixes])
+            session = object_session(review)
+            if session:
+                session.commit()
+            # The prepared commit is durable before the network side effect.
+            from github import Auth, Github
+            current_head = Github(auth=Auth.Token(token), timeout=15).get_repo(review.repo_full_name).get_pull(review.pr_number).head.sha
+            if current_head != review.commit_sha:
+                raise AutofixError("PR head changed while preparing fixes; run a new review.")
+            ref = f"refs/heads/{branch_name}"
+            _run_git(["push", f"--force-with-lease={ref}:", "origin", f"HEAD:{ref}"], cwd=workspace)
         except subprocess.CalledProcessError as exc:
             raise AutofixError(f"Git commit/push failed: {exc.stderr[:200]}") from exc
 
@@ -263,12 +357,16 @@ def _apply_test_fix(
         return
 
     # Write test file
-    test_dir = os.path.join(workspace, "tests")
+    test_dir = str(safe_workspace_path(workspace, "tests/codeguardian"))
     os.makedirs(test_dir, exist_ok=True)
-    test_filename = f"test_{target_function}.py"
+    suffix = hashlib.sha256(f"{target_file}:{target_function}".encode()).hexdigest()[:12]
+    test_filename = f"test_{target_function.replace('.', '_')}_{suffix}.py"
     test_path = os.path.join(test_dir, test_filename)
 
-    with open(test_path, "w", encoding="utf-8") as f:
+    if os.path.lexists(test_path):
+        result.skipped_fixes.append(SkippedFix(target_function, target_file, "Generated test path already exists."))
+        return
+    with open(test_path, "x", encoding="utf-8") as f:
         f.write(test_code)
 
     result.applied_fixes.append(AppliedFix(
@@ -305,7 +403,7 @@ def _apply_docstring_fix(
         return
 
     # Insert docstring into the source file
-    full_path = os.path.join(workspace, target_file)
+    full_path = str(safe_workspace_path(workspace, target_file))
     if not _insert_docstring(full_path, target_function, docstring):
         result.skipped_fixes.append(SkippedFix(
             target_function=target_function,
@@ -334,28 +432,37 @@ def _insert_docstring(file_path: str, func_name: str, docstring: str) -> bool:
         logger.warning("Cannot parse %s for docstring insertion: %s", file_path, exc)
         return False
 
-    for node in ast.walk(tree):
+    selected = find_function(tree, func_name)
+    for node in [selected] if selected else []:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name == func_name:
+            if node is selected:
+                # A one-line suite needs structural rewriting; skip rather than corrupt it.
+                if node.body[0].lineno == node.lineno:
+                    return False
                 # Find the line after the function def (colon line)
                 insert_line = node.body[0].lineno - 1  # 0-indexed
 
                 # Check if there's already a docstring
                 if (
                     isinstance(node.body[0], ast.Expr)
-                    and isinstance(node.body[0].value, (ast.Constant, ast.Str))
+                    and isinstance(node.body[0].value, ast.Constant)
+                    and isinstance(node.body[0].value.value, str)
                 ):
                     # Replace existing docstring
                     old_end = node.body[0].end_lineno  # 1-indexed
-                    indent = "    " * (node.col_offset // 4 + 1)
+                    indent = lines[insert_line][:len(lines[insert_line]) - len(lines[insert_line].lstrip())]
                     new_docstring_lines = _format_docstring(docstring, indent)
                     lines[insert_line:old_end] = new_docstring_lines
                 else:
                     # Insert new docstring
-                    indent = "    " * (node.col_offset // 4 + 1)
+                    indent = lines[insert_line][:len(lines[insert_line]) - len(lines[insert_line].lstrip())]
                     new_docstring_lines = _format_docstring(docstring, indent)
                     lines[insert_line:insert_line] = new_docstring_lines
 
+                try:
+                    ast.parse("".join(lines))
+                except SyntaxError:
+                    return False
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.writelines(lines)
                 return True
@@ -365,6 +472,7 @@ def _insert_docstring(file_path: str, func_name: str, docstring: str) -> bool:
 
 def _format_docstring(docstring: str, indent: str) -> list[str]:
     """Format a docstring into lines with proper indentation and triple quotes."""
+    docstring = docstring.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
     doc_lines = docstring.strip().split("\n")
     if len(doc_lines) == 1:
         return [f'{indent}"""{doc_lines[0]}"""\n']
@@ -387,4 +495,5 @@ def _run_git(args: list[str], cwd: str) -> subprocess.CompletedProcess:
         text=True,
         timeout=60,
         check=True,
+        env=git_environment(),
     )

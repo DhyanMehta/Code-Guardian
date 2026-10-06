@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from backend.api.auth import get_current_user
 from backend.db.database import get_db
 from backend.db.models import User
+from backend.services.authorization import authorized_repo_names
 from backend.services.metrics_service import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
@@ -67,4 +68,5 @@ def get_trends(
         since=since,
         days=days,
         installation_ids=scope_ids,
+        repo_names=authorized_repo_names(current_user),
     )

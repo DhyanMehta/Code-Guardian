@@ -39,6 +39,13 @@ def test_parse_empty_results_is_clean() -> None:
     assert bandit_runner.parse_output(json.dumps({"results": []})) == []
 
 
+def test_partial_scan_preserves_evidence() -> None:
+    payload = dict(_SAMPLE, errors=[{"reason": "syntax error"}])
+    with pytest.raises(ScannerOutputError) as error:
+        bandit_runner.parse_output(json.dumps(payload))
+    assert error.value.partial_findings[0].rule_id == "B602"
+
+
 def test_parse_malformed_raises() -> None:
     with pytest.raises(ScannerOutputError):
         bandit_runner.parse_output("<not json>")

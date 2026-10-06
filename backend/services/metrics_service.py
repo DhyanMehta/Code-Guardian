@@ -18,7 +18,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from backend.agents.state import AgentOutcome
 from backend.agents.supervisor import AGENT_NAMES
@@ -44,7 +44,7 @@ DEFAULT_LIMIT = 50
 MAX_LIMIT = 500
 
 # Outcome strings that represent a genuinely persisted agent run.
-_VALID_OUTCOMES = frozenset(outcome.value for outcome in AgentOutcome)
+_VALID_OUTCOMES = frozenset(outcome.value for outcome in AgentOutcome if outcome is not AgentOutcome.UNKNOWN)
 
 TERMINAL_STATUSES = ("completed", "failed", "skipped")
 
@@ -65,6 +65,7 @@ def compute_trends(
     since: datetime | None = None,
     days: int | None = None,
     installation_ids: list[int] | None = None,
+    repo_names: set[str] | None = None,
 ) -> dict[str, Any]:
     """Build the trends payload.
 
@@ -88,6 +89,8 @@ def compute_trends(
         since = datetime.now(timezone.utc) - timedelta(days=max(1, days))
 
     query = db.query(Review)
+    if repo_names is not None:
+        query = query.filter(Review.repo_full_name.in_(repo_names))
     if installation_ids is not None:
         query = query.filter(Review.installation_id.in_(installation_ids))
     if repo:
@@ -97,7 +100,7 @@ def compute_trends(
 
     # Newest-first for the limit, then reversed so the series is chronological.
     recent = (
-        query.order_by(Review.created_at.desc(), Review.id.desc()).limit(limit).all()
+        query.options(selectinload(Review.findings), selectinload(Review.agent_runs)).order_by(Review.created_at.desc(), Review.id.desc()).limit(limit).all()
     )
     reviews = list(reversed(recent))
 
@@ -223,7 +226,7 @@ def compute_trends(
                 1 for point in points if point["coverage_complete"]
             ),
             "reviews_with_coverage_gap": sum(
-                1 for point in points if point["degraded_agents"]
+                1 for point in points if not point["coverage_complete"]
             ),
         },
     }

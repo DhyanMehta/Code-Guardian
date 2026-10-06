@@ -19,9 +19,22 @@ from backend.tools.llm_client import (
     LLMRateLimitError,
     LLMResponseError,
     LLMServiceError,
+    TokenBucketLimiter,
+    _extract_retry_delay,
+    _get_token_limiter,
+    estimate_tokens,
+    reset_throttle,
 )
 
 _REQ = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
+
+
+@pytest.fixture(autouse=True)
+def _reset_throttle_each_test():
+    reset_throttle()
+    yield
+    reset_throttle()
+
 
 
 def _resp(status: int) -> httpx.Response:
@@ -309,3 +322,119 @@ class TestCallThrottle:
         assert client.complete(system_prompt="s", user_prompt="u") == "recovered"
         assert attempts["n"] == 2
         module.reset_throttle()
+
+
+# --------------------------------------------------------------------------- #
+# Token Bucket Limiter & Rate Limiting Requirements
+# --------------------------------------------------------------------------- #
+
+
+class TestTokenLimiter:
+    def test_requests_below_budget_proceed_immediately(self) -> None:
+        limiter = TokenBucketLimiter(tpm_limit=8000, safety_margin=0.8, window_seconds=60.0)
+        # Safe budget is 6400
+        waited = limiter.acquire(2000, max_wait=5.0)
+        assert waited < 0.1
+        waited2 = limiter.acquire(2000, max_wait=5.0)
+        assert waited2 < 0.1
+        assert len(limiter._history) == 2
+
+    def test_request_exceeding_budget_waits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        slept: list[float] = []
+        monkeypatch.setattr("backend.tools.llm_client.time.sleep", lambda s: slept.append(s))
+        limiter = TokenBucketLimiter(tpm_limit=8000, safety_margin=0.8, window_seconds=60.0)
+        # First acquire 5000 tokens (safe limit is 6400)
+        limiter.acquire(5000, max_wait=70.0)
+        # Second acquire needs 2000 tokens -> 5000 + 2000 = 7000 > 6400 -> must wait
+        limiter.acquire(2000, max_wait=70.0)
+        assert len(slept) > 0
+        assert slept[0] > 0
+
+    def test_old_requests_evicted_from_rolling_window(self) -> None:
+        import time as _time
+        limiter = TokenBucketLimiter(tpm_limit=8000, safety_margin=0.8, window_seconds=60.0)
+        now = _time.monotonic()
+        # Add an old request from 65 seconds ago
+        limiter.record_tokens(5000, ts=now - 65.0)
+        limiter._evict_expired(now)
+        assert len(limiter._history) == 0
+        # New request for 5000 proceeds immediately without waiting
+        waited = limiter.acquire(5000, max_wait=5.0)
+        assert waited < 0.1
+
+    def test_concurrent_callers_do_not_bypass_budget(self) -> None:
+        import threading
+        limiter = TokenBucketLimiter(tpm_limit=8000, safety_margin=0.8, window_seconds=60.0)
+        results = []
+
+        def worker():
+            w = limiter.acquire(1000, max_wait=2.0)
+            results.append(w)
+
+        threads = [threading.Thread(target=worker) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == 6
+        assert len(limiter._history) == 6
+        total_tokens = sum(t for _, t in limiter._history)
+        assert total_tokens == 6000 <= 6400
+
+    def test_reconciliation_updates_reservation(self) -> None:
+        import time as _time
+        limiter = TokenBucketLimiter(tpm_limit=8000, safety_margin=0.8, window_seconds=60.0)
+        now = _time.monotonic()
+        limiter.acquire(3000, max_wait=5.0)
+        assert limiter._history[0][1] == 3000
+        # Reconcile with actual provider usage
+        limiter.reconcile(now, 3000, 2450)
+        assert limiter._history[0][1] == 2450
+
+    def test_cooldown_blocks_until_expired(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        slept: list[float] = []
+        monkeypatch.setattr("backend.tools.llm_client.time.sleep", lambda s: slept.append(s))
+        limiter = TokenBucketLimiter(tpm_limit=8000, safety_margin=0.8, window_seconds=60.0)
+        limiter.record_cooldown(12.5)
+        limiter.acquire(500, max_wait=70.0)
+        assert len(slept) > 0
+        assert slept[0] >= 12.0
+
+
+class TestRateLimitDelayParsingDetailed:
+    @pytest.mark.parametrize(
+        ("message", "expected_delay"),
+        [
+            ("Please try again in 12.9s", 12.9),
+            ("Please try again in 18.62s", 18.62),
+            ("Please try again in 14.1375s", 14.1375),
+            ("Rate limit reached for model `openai/gpt-oss-120b`. Please try again in 18.62s.", 18.62),
+            ("rate limited: retry in 4.5s", 4.5),
+        ],
+    )
+    def test_extract_retry_delay_formats(self, message: str, expected_delay: float) -> None:
+        assert _extract_retry_delay(message) == expected_delay
+
+
+def test_empty_generation_records_tokens_and_paces(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simulated 400 json_validate_failed with empty generation records prompt tokens and paces."""
+    slept: list[float] = []
+    monkeypatch.setattr("backend.tools.llm_client.time.sleep", lambda s: slept.append(s))
+
+    limiter = _get_token_limiter()
+    limiter.reset()
+
+    create = _FakeCreate(
+        [
+            _bad_request(empty_generation=True),
+            _completion("{\"findings\": []}"),
+        ]
+    )
+    client = _make_client(create)
+    res = client.complete(system_prompt="s" * 300, user_prompt="u" * 600)
+    assert res == "{\"findings\": []}"
+    assert create.calls == 2
+    # Verify limiter recorded both the failed prompt tokens and the retry reservation
+    assert len(limiter._history) >= 2
+    limiter.reset()

@@ -157,7 +157,7 @@ class TestDocAgentHappyPath:
                 return True
         """)
 
-        diff = "--- a/service.py\n+++ b/service.py\n@@ -1,5 +1,7 @@\n def send_email(recipient, subject, timeout):\n     \"\"\"Send an email notification.\n \n     Args:\n         recipient: Email address.\n         subject: Email subject line.\n     \"\"\"\n     return True\n"
+        diff = "--- a/service.py\n+++ b/service.py\n@@ -1,5 +1,7 @@\n-def send_email(recipient, subject):\n+def send_email(recipient, subject, timeout):\n     \"\"\"Send an email notification.\n \n     Args:\n         recipient: Email address.\n         subject: Email subject line.\n     \"\"\"\n     return True\n"
 
         llm_response = json.dumps({
             "docstring": "Send an email notification.\n\nArgs:\n    recipient: Email address.\n    subject: Email subject line.\n    timeout: Request timeout in seconds.",

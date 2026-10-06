@@ -42,6 +42,7 @@ class AgentOutcome(str, Enum):
     "unknown", not "clean"."""
 
     FAILED = "failed"
+    UNKNOWN = "unknown"
     """The agent raised an unhandled exception and produced nothing."""
 
     @classmethod
@@ -52,7 +53,7 @@ class AgentOutcome(str, Enum):
         try:
             return cls(str(value))
         except ValueError:
-            return cls.OK
+            return cls.UNKNOWN
 
 
 @dataclass
@@ -165,6 +166,7 @@ class TestGapAgentResult:
     gaps: list[TestGap] = field(default_factory=list)
     drafted_tests: list[DraftedTest] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    outcome: AgentOutcome = AgentOutcome.OK
 
     @property
     def has_gaps(self) -> bool:
@@ -197,6 +199,7 @@ class DocAgentResult:
     flagged_functions: list[DocTarget] = field(default_factory=list)
     drafted_docstrings: list[DraftedDocstring] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    outcome: AgentOutcome = AgentOutcome.OK
 
     @property
     def has_findings(self) -> bool:
@@ -215,6 +218,8 @@ class ReviewState(TypedDict, total=False):
     pr: PRMetadata
     diff: str
     workspace_path: str
+    installation_id: int | None
+    standards_version: str | None
 
     # Per-agent results, keyed by agent name — merged via _merge_dicts reducer.
     raw_findings: Annotated[dict[str, list[RawFinding]], _merge_dicts]
