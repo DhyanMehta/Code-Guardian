@@ -423,29 +423,12 @@ class TestGapAgent:
             return None
 
         test_code = parsed.get("test_code", "")
-        imports = parsed.get("imports", [])
 
         if not test_code.strip():
             return None
 
-        # Anti-hallucination check 1: test must call the target function.
-        if gap.function.name not in test_code:
-            logger.warning(
-                "Drafted test does not call target function '%s'; dropping.",
-                gap.function.name,
-            )
-            return None
-
-        # Anti-hallucination check 2: imported modules must exist.
-        if isinstance(imports, list):
-            for module_path in imports:
-                if not self._module_exists(str(module_path), workspace_path):
-                    logger.warning(
-                        "Drafted test imports non-existent module '%s'; dropping.",
-                        module_path,
-                    )
-                    return None
-
+        # Validate imports parsed from the actual code. Model-supplied metadata
+        # may list imported symbols (module.function) instead of module names.
         from backend.agents._validation import validate_drafted_test
         qualified = (gap.function.class_name + "." if gap.function.class_name else "") + gap.function.name
         valid, reason = validate_drafted_test(qualified, gap.function.file_path, test_code, workspace_path)

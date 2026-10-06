@@ -90,7 +90,32 @@ and a recent worker heartbeat. A liveness response alone does not prove readines
 - Native Bandit and Semgrep detected the expected synthetic assert/eval findings. Gitleaks completed successfully. GitHub App authentication and a small configured Groq JSON request succeeded.
 - Staged changes passed Gitleaks secret scanning and `git diff --check`.
 
-The application database was not migrated during verification. Full interactive
-OAuth login and posting comments/pushing auto-fix branches on a live PR were not
-exercised; their request handling and failure/retry paths were tested with mocks.
+During the initial verification, the application database was not migrated and
+live PR writes were not exercised. The subsequent authorized live run is recorded
+below. Interactive OAuth login and live auto-fix branch pushes remain untested.
 No frontend changes are included in this backend implementation.
+
+## Live httpx verification — 2026-10-06
+
+With the user's confirmation, reviewed `DhyanMehta/httpx` PR #1 at
+`5b2630b1d2b7442718dea99c443513677afc06dd` (PR #2 did not exist in that repository).
+Backed up the application database under `.git/codeguardian-backups`, configured
+the missing encryption key locally, applied the migration, and started the API
+on `127.0.0.1:8080` with the separate worker. A locally signed webhook submitted
+the real PR; Git checkout, scanners, RAG, Groq, persistence and comment delivery
+were real, without mocked agent responses.
+
+Review #79 completed with 16 findings: security 1, quality 0, static test gaps 9,
+documentation 6. All four agents reported successful analysis. Eleven findings
+had validated drafts (six docstrings and five tests). One additional test draft
+failed with the provider's JSON-generation error; drafts are optional and were
+not executed or applied. The bot's
+[posted report](https://github.com/DhyanMehta/httpx/pull/1#issuecomment-6020884748)
+was fetched and verified to exactly match the stored Markdown snapshot.
+
+Live validation exposed and fixed return/exception types being mistaken for
+docstring parameters and imported-symbol metadata being mistaken for module
+paths. All 454 tests passed after those fixes. Constructor draft validation was
+then corrected to accept a class call for `Class.__init__`; all 88 affected tests
+passed, including its new regression. That last correction was unit-tested after
+review #79; it has not been re-run on a third live review.

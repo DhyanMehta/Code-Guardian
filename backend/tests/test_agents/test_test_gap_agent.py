@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 import os
 import textwrap
 
@@ -267,7 +268,8 @@ class TestTestGapAgentAntiHallucination:
         assert result.has_gaps
         assert len(result.drafted_tests) == 0
 
-    def test_valid_drafted_test_accepted(self, tmp_path) -> None:
+    @pytest.mark.parametrize("imports", [["app"], ["app.calculate_risk"]])
+    def test_valid_drafted_test_accepted(self, tmp_path, imports) -> None:
         _write_file(tmp_path, "app.py", """\
             def calculate_risk(score, threshold):
                 return "high" if score > threshold else "low"
@@ -275,7 +277,7 @@ class TestTestGapAgentAntiHallucination:
 
         llm_response = json.dumps({
             "test_code": "from app import calculate_risk\n\ndef test_calculate_risk():\n    assert calculate_risk(10, 5) == 'high'\n",
-            "imports": ["app"],
+            "imports": imports,
         })
         llm = _FakeLLM(llm_response)
         agent = TestGapAgent(llm_client=llm)

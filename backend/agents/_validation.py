@@ -189,22 +189,37 @@ def extract_documented_params(docstring: str) -> set[str]:
     """Extract parameter names from a Google/NumPy/Sphinx-style docstring."""
     params: set[str] = set()
     _SECTION_HEADERS = frozenset({
-        "args", "arguments", "parameters", "params",
+        "args", "arguments", "parameters", "params", "keyword args",
+        "keyword arguments", "other parameters",
         "returns", "return", "raises", "yields", "yield",
         "attributes", "note", "notes", "example", "examples",
         "references", "see", "todo", "warnings", "warns",
     })
 
-    param_pattern = re.compile(r"^\s+(\w+)\s*[\(:]", re.MULTILINE)
-    sphinx_pattern = re.compile(r":param\s+(\w+)\s*:", re.MULTILINE)
-
-    for match in param_pattern.finditer(docstring):
-        name = match.group(1)
-        if name.lower() not in _SECTION_HEADERS:
-            params.add(name)
-
+    param_pattern = re.compile(r"^\s*(\*{0,2}\w+(?:\s*,\s*\*{0,2}\w+)*)\s*(?:\([^)]*\))?\s*:")
+    sphinx_pattern = re.compile(r"^\s*:param\s+(?:[^:\s]+\s+)?(\*{0,2}\w+)\s*:", re.MULTILINE)
+    in_parameters = False
+    entry_indent = None
+    lines = docstring.expandtabs().splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        header = stripped.rstrip(":").lower()
+        underlined = index + 1 < len(lines) and bool(re.fullmatch(r"\s*-{3,}\s*", lines[index + 1]))
+        if (stripped.endswith(":") and header in _SECTION_HEADERS) or underlined:
+            in_parameters = header in {"args", "arguments", "parameters", "params", "keyword args", "keyword arguments", "other parameters"}
+            entry_indent = None
+            continue
+        if not in_parameters:
+            continue
+        match = param_pattern.match(line)
+        if match:
+            indent = len(line) - len(line.lstrip())
+            if entry_indent is None:
+                entry_indent = indent
+            if indent == entry_indent:
+                params.update(name.strip().lstrip("*") for name in match.group(1).split(","))
     for match in sphinx_pattern.finditer(docstring):
-        params.add(match.group(1))
+        params.add(match.group(1).lstrip("*"))
 
     return params
 
@@ -229,6 +244,8 @@ def validate_drafted_test(
         return False, f"Function '{target_function}' no longer exists in {target_file}"
 
     target_name = target_function.rsplit(".", 1)[-1]
+    if target_name == "__init__" and "." in target_function:
+        target_name = target_function.rsplit(".", 1)[0].rsplit(".", 1)[-1]
     if not any(isinstance(n, ast.Call) and ((isinstance(n.func, ast.Name) and n.func.id == target_name) or (isinstance(n.func, ast.Attribute) and n.func.attr == target_name)) for n in ast.walk(tree)):
         return False, f"Test code does not reference target function '{target_function}'"
 

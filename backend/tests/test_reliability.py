@@ -21,6 +21,27 @@ from backend.tests.test_api.test_webhooks import _sign
 from backend.tools.results import RawFinding, Severity
 
 
+@pytest.mark.parametrize("docstring, expected", [
+    ("Calculate delay.\n\nArgs:\n    attempt (int): Attempt index.\n\nReturns:\n    float: Delay in seconds.\n\nRaises:\n    ValueError: Invalid attempt.", {"attempt"}),
+    ("Calculate delay.\n\nParameters\n----------\nx, y : int\n    Inputs.\nReturns\n-------\nfloat : result\n    Delay.", {"x", "y"}),
+    ("Compute.\n:param int attempt: Attempt index.\n:param **kwargs: Options.\n:returns: Delay.", {"attempt", "kwargs"}),
+])
+def test_docstring_parameters_exclude_return_types(docstring, expected):
+    from backend.agents._validation import extract_documented_params
+    assert extract_documented_params(docstring) == expected
+
+
+def test_constructor_draft_calls_class_instead_of_dunder_init(tmp_path):
+    from backend.agents.test_gap_agent import TestGapAgent
+    (tmp_path / "app.py").write_text("class Config:\n    def __init__(self, value):\n        self.value = value\n")
+    code = "from app import Config\n\ndef test_config():\n    assert Config(1).value == 1\n"
+    gap = SimpleNamespace(function=SimpleNamespace(name="__init__", class_name="Config", file_path="app.py"))
+    draft = TestGapAgent()._validate_drafted_test(json.dumps({"test_code": code}), gap, str(tmp_path))
+    assert draft is not None
+    assert draft.target_function == "Config.__init__"
+    assert not validate_drafted_test("Config.__init__", "app.py", "def test_other():\n    Other(1)\n", str(tmp_path))[0]
+
+
 def test_encrypted_credentials_and_invalid_key(monkeypatch):
     token = authorization.encrypt_token("synthetic-github-token")
     assert "synthetic-github-token" not in token
