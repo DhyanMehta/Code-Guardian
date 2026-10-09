@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from backend.config import get_settings
-from backend.db.models import Review, ReviewAgentRun, Finding
+from backend.db.models import Review, ReviewAgentRun, Finding, ReviewProgress
 from backend.services.review_service import create_review, _execute_graph_and_persist
 from backend import worker
 
@@ -161,5 +161,8 @@ def test_real_agents_git_rag_and_saved_report(pg, tmp_path, monkeypatch):
         assert {"security", "test_gap", "documentation"} <= {finding.agent for finding in findings}
         assert sum(bool(finding.fix_data) for finding in findings) >= 2
         assert review.status == "completed" and review.delivery_status == "posted"
+        events = db.query(ReviewProgress).filter_by(review_id=review.id).order_by(ReviewProgress.id).all()
+        assert events[-1].stage == 'aggregation' and events[-1].status == 'ok'
+        assert len([event for event in events if event.stage == 'agent' and event.status == 'ok']) == 4
         assert "evaluate" in review.report_markdown
         assert "No issues found" not in review.report_markdown

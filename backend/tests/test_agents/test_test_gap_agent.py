@@ -77,6 +77,16 @@ DIFF_MODIFY_EXISTING = """\
 
 
 class TestTestGapAgentHappyPath:
+    @pytest.mark.parametrize("path", ["tests/test_billing.py", "test_billing.py", "billing_test.py", "test/helpers.py"])
+    def test_test_code_is_coverage_not_a_gap_target(self, tmp_path, path):
+        _write_file(tmp_path, path, "def test_verify_account_status():\n    assert True\n")
+        diff = f"--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,2 @@\n+def test_verify_account_status():\n+    assert True\n"
+        llm = _FakeLLM(AssertionError("Test code must not generate test-test drafts"))
+        result = TestGapAgent(llm_client=llm).run(diff, [path], str(tmp_path))
+        assert not result.gaps
+        assert not result.drafted_tests
+        assert llm.calls == 0
+
     def test_identifies_new_function_without_test(self, tmp_path) -> None:
         _write_file(tmp_path, "app.py", """\
             def calculate_risk(score, threshold):

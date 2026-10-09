@@ -27,7 +27,7 @@ from backend.agents.state import AgentOutcome
 from backend.agents.supervisor import AGENT_NAMES
 from backend.api.auth import get_current_user
 from backend.db.database import get_db
-from backend.db.models import Finding, Review, ReviewAgentRun, User
+from backend.db.models import Finding, Review, ReviewAgentRun, ReviewProgress, User
 from backend.services.report_builder import (
     AgentStatus,
     aggregate_from_records,
@@ -262,6 +262,11 @@ def get_review(
 
     return {
         "id": review.id,
+        "attempt": review.attempt,
+        "heartbeat_at": review.heartbeat_at.isoformat() if review.heartbeat_at else None,
+        "progress": [{"id": event.id, "attempt": event.attempt, "stage": event.stage,
+            "agent": event.agent, "status": event.status, "created_at": event.created_at.isoformat()}
+            for event in db.query(ReviewProgress).filter_by(review_id=review.id).order_by(ReviewProgress.id).all()],
         "installation_id": review.installation_id,
         "repo_full_name": review.repo_full_name,
         "pr_number": review.pr_number,

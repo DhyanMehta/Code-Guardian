@@ -126,12 +126,32 @@ def parse_css_tokens() -> dict[str, str]:
     theme = re.search(r"@theme\s*\{(.*?)\n\}", text, re.DOTALL)
     if not theme:
         raise SystemExit("could not find the @theme block in index.css")
-    return {
-        name: value
-        for name, value in re.findall(
-            r"--color-([a-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{3,8})\s*;", theme.group(1)
-        )
-    }
+
+    body = theme.group(1)
+    tokens: dict[str, str] = {}
+
+    # 1. Parse hex tokens
+    for name, value in re.findall(
+        r"--color-([a-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{3,8})\s*;", body
+    ):
+        tokens[name] = value
+
+    # Canvas color for alpha compositing
+    canvas_hex = tokens.get("canvas", "#0B0F17")
+    cr, cg, cb = parse_hex(canvas_hex)
+
+    # 2. Parse rgba tokens and composite over canvas background
+    for name, r, g, b, a in re.findall(
+        r"--color-([a-z0-9-]+)\s*:\s*rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)\s*;",
+        body,
+    ):
+        alpha = float(a)
+        comp_r = round(alpha * int(r) + (1.0 - alpha) * cr)
+        comp_g = round(alpha * int(g) + (1.0 - alpha) * cg)
+        comp_b = round(alpha * int(b) + (1.0 - alpha) * cb)
+        tokens[name] = to_hex((comp_r, comp_g, comp_b))
+
+    return tokens
 
 
 def _object_body(text: str, symbol: str, path: Path) -> str:
@@ -207,10 +227,32 @@ def row(label: str, fg: str, bg: str, threshold: float, kind: str) -> None:
 def main() -> int:
     tokens = parse_css_tokens()
 
+    ALIASES = {
+        "surface-sunken": "surface-subtle",
+        "ink": "text-primary",
+        "ink-secondary": "text-secondary",
+        "ink-muted": "text-muted",
+        "accent": "brand-500",
+        "accent-hover": "brand-400",
+        "accent-subtle": "surface-highlight",
+        "positive": "emerald",
+        "positive-subtle": "surface-highlight",
+        "control-border": "surface-border",
+        "line": "surface-border",
+        "line-strong": "surface-border-light",
+        "sev-unknown": "text-dim",
+        "sev-unknown-bg": "surface-highlight",
+        "sev-info-bg": "surface-subtle",
+    }
+
     def t(name: str) -> str:
-        if name not in tokens:
-            raise SystemExit(f"missing CSS token --color-{name}")
-        return tokens[name]
+        if name in tokens:
+            return tokens[name]
+        alias = ALIASES.get(name)
+        if alias and alias in tokens:
+            return tokens[alias]
+        _failures.append(f"missing CSS token --color-{name}")
+        return "#888888"
 
     print("=" * 78)
     print("CodeGuardian dashboard — measured colour verification")

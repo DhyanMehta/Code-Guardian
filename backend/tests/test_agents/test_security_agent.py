@@ -93,6 +93,17 @@ def _agent(*, semgrep=None, bandit=None, gitleaks=None, llm=None) -> SecurityAge
     )
 
 
+def test_compact_prompt_retains_every_scanner_evidence_field():
+    finding = _finding('bandit', 'B101', 2)
+    llm = _EchoTriageLLM()
+    result = _agent(bandit=lambda _: [finding], llm=llm).run('/workspace')
+    prompt = llm.prompts[0]['user_prompt']
+    expected = [f.to_prompt_dict() for f in result.raw_findings]
+    assert json.loads(prompt) == expected
+    assert len(prompt) < len(json.dumps(expected, indent=2))
+    assert len(result.triaged_findings) == 1
+
+
 def test_happy_path_triages_all_findings() -> None:
     f1 = _finding("semgrep", "rule-a", 1)
     f2 = _finding("bandit", "B101", 2)

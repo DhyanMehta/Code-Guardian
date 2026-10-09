@@ -149,6 +149,11 @@ class TestGapAgent:
         functions: list[FunctionInfo] = []
 
         for file_path in python_files:
+            # Test code supplies coverage; it is not itself a target for another
+            # generated test (which otherwise produces test_test_* wrappers).
+            normalized = file_path.replace("\\", "/")
+            if self._is_test_file(os.path.basename(normalized), os.path.join(workspace_path, os.path.dirname(normalized)), workspace_path):
+                continue
             file_hunks = hunks.get(file_path)
             if not file_hunks:
                 continue

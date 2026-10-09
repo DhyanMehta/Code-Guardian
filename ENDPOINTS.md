@@ -1,10 +1,12 @@
 # CodeGuardian AI — API Contract (living document)
 
-Base URL (local dev): `http://localhost:8000`
+Base URL (frontend's local default): `http://localhost:8080`
 
 Status legend: **[implemented]** = live as of the current session · **[planned]** = stubbed / future session.
 
 ## Current reliability changes (`Dhyan`)
+
+- `POST /auth/installations/refresh` — authenticated, bodyless access reconciliation using the user's GitHub credential. Returns the same profile as `GET /auth/me`: `id:number`, `github_user_id:number`, `github_login:string`, `avatar_url:string|null`, `installations:Array<{id:number,account_login:string,account_type:string,target_type:string,role:string,suspended:boolean}>`. Setup URL parameters never grant access. Complete discovery updates roles, suspension metadata and links without changing review policy; failed/incomplete discovery leaves links unchanged. A fresh login is required on 401. GitHub failures surface as errors with a manual refresh path.
 
 These updates supersede older session descriptions below. See
 [the backend reliability contract](docs/BACKEND_RELIABILITY.md) for deployment and flow details.
@@ -105,3 +107,10 @@ with an explicit origin list from `CORS_ALLOWED_ORIGINS` (default
 `http://localhost:5173,http://127.0.0.1:5173`), methods `GET`/`POST`/`OPTIONS`,
 `allow_headers=["Content-Type", "Authorization"]`, and credentials disabled.
 Never `*`: these endpoints create branches and record human approvals. **[extended Session 8]**
+# Frontend flow additions (2026-10-09)
+
+- `GET /auth/installation-url` (authenticated): `{url:string}`. GitHub App installer URL from `GITHUB_APP_SLUG` or known app metadata; explicit 503 if unavailable.
+- `GET /profile/review-mode` (authenticated): `{installations:[{id:number,account_login:string,review_mode:"auto"|"manual"}],review_mode:"auto"|"manual"|"mixed"|null,version:string}`. Only active installations administered by the caller are included.
+- `PATCH /profile/review-mode`: body `{review_mode:"auto"|"manual",version:string}`. Live administrator checks precede one atomic update across the current scope. Returns the same shape; stale scope/modes return 409. No per-user override of shared installation policy.
+- `GET /reviews/{id}` additionally returns `attempt:number`, `heartbeat_at:string|null`, and `progress:[{id:number,attempt:number,stage:"checkout"|"analysis"|"agent"|"aggregation",agent:"security"|"quality"|"test_gap"|"documentation"|null,status:"started"|"ok"|"degraded"|"failed",created_at:string}]`. Events are ordered by id and separated by attempt. Historical reviews can have an empty event list. Terminal review status remains authoritative if an attempt was interrupted.
+- `agent_runs[].scanner_info` is optional for historical unrecorded runs and otherwise `string|null`.

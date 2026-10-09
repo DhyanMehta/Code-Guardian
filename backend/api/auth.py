@@ -281,57 +281,7 @@ def github_callback(
     store_tokens(user, token_data)
     db.flush()
 
-    # Refresh user_installations links live
-    active_inst_ids = set()
-    for inst_item in installations_data:
-        inst_id = inst_item["id"]
-        active_inst_ids.add(inst_id)
-        account = inst_item.get("account", {})
-
-        # Ensure installation row exists
-        inst_row = db.get(Installation, inst_id)
-        if inst_row is None:
-            inst_row = Installation(
-                id=inst_id,
-                account_login=account.get("login", ""),
-                account_type=account.get("type", "User"),
-                app_slug=inst_item.get("app_slug", ""),
-                target_type=inst_item.get("repository_selection", "selected"),
-            )
-            db.add(inst_row)
-            db.flush()
-
-        # Link user to installation
-        existing_link = (
-            db.query(UserInstallation)
-            .filter(
-                UserInstallation.user_id == user.id,
-                UserInstallation.installation_id == inst_id,
-            )
-            .first()
-        )
-        role = "admin" if is_manager(user_token, github_login, account.get("login", ""), account.get("type", "User")) else "member"
-        if existing_link is None:
-            db.add(
-                UserInstallation(
-                    user_id=user.id,
-                    installation_id=inst_id,
-                    role=role,
-                )
-            )
-        else:
-            existing_link.role = role
-
-    # Remove links to installations the user no longer has access to
-    (
-        db.query(UserInstallation)
-        .filter(
-            UserInstallation.user_id == user.id,
-            ~UserInstallation.installation_id.in_(active_inst_ids),
-        )
-        .delete(synchronize_session=False)
-    )
-    db.commit()
+    active_inst_ids = _sync_installations(db, user, user_token, installations_data)
 
     # Step 5: Issue session JWT
     now = _utcnow()
@@ -372,6 +322,74 @@ def github_callback(
     }
 
 
+def _sync_installations(db: Session, user: User, token: str, installations_data: list[dict]) -> set[int]:
+    # Refresh user_installations links live
+    active_inst_ids = set()
+    for inst_item in installations_data:
+        if not isinstance(inst_item, dict) or type(inst_item.get('id')) is not int or inst_item['id'] <= 0 or not isinstance(inst_item.get('account'), dict):
+            raise HTTPException(502, 'Invalid installation metadata from GitHub.')
+        inst_id = inst_item["id"]
+        active_inst_ids.add(inst_id)
+        account = inst_item.get("account", {})
+
+        # Ensure installation row exists
+        inst_row = db.get(Installation, inst_id)
+        if inst_row is None:
+            inst_row = Installation(
+                id=inst_id,
+                account_login=account.get("login", ""),
+                account_type=account.get("type", "User"),
+                app_slug=inst_item.get("app_slug", ""),
+                target_type=inst_item.get("repository_selection", "selected"),
+            )
+            db.add(inst_row)
+            db.flush()
+
+        inst_row.account_login = account.get("login", inst_row.account_login)
+        inst_row.account_type = account.get("type", inst_row.account_type)
+        inst_row.app_slug = inst_item.get("app_slug", inst_row.app_slug)
+        inst_row.target_type = inst_item.get("repository_selection", inst_row.target_type)
+        inst_row.uninstalled_at = None
+        if "suspended_at" in inst_item:
+            value = inst_item["suspended_at"]
+            inst_row.suspended_at = datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
+
+        # Link user to installation
+        existing_link = (
+            db.query(UserInstallation)
+            .filter(
+                UserInstallation.user_id == user.id,
+                UserInstallation.installation_id == inst_id,
+            )
+            .first()
+        )
+        role = "admin" if is_manager(token, user.github_login, account.get("login", ""), account.get("type", "User")) else "member"
+        if existing_link is None:
+            db.add(
+                UserInstallation(
+                    user_id=user.id,
+                    installation_id=inst_id,
+                    role=role,
+                )
+            )
+        else:
+            existing_link.role = role
+
+    # Remove links to installations the user no longer has access to
+    (
+        db.query(UserInstallation)
+        .filter(
+            UserInstallation.user_id == user.id,
+            ~UserInstallation.installation_id.in_(active_inst_ids),
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+
+    db.expire(user, ["installation_links"])
+    return active_inst_ids
+
+
 @router.get("/me")
 def get_me(
     current_user: User = Depends(get_current_user),
@@ -397,6 +415,50 @@ def get_me(
         "avatar_url": current_user.avatar_url,
         "installations": installations,
     }
+
+
+@router.get("/installation-url")
+def installation_url(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Public App metadata, never credentials; usable before first installation."""
+    import re
+    slug = get_settings().github_app_slug
+    if not slug:
+        from backend.db.models import Installation
+        known = db.query(Installation).filter(Installation.app_slug != "").order_by(Installation.id).first()
+        slug = known.app_slug if known else ""
+    if not re.fullmatch(r"[A-Za-z0-9-]+", slug):
+        raise HTTPException(503, "GitHub App installation URL is not configured. Set GITHUB_APP_SLUG on the server.")
+    return {"url": f"https://github.com/apps/{slug}/installations/new"}
+
+
+@router.post("/installations/refresh")
+def refresh_installations(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Reconcile access from GitHub, never from setup-URL query parameters."""
+    from backend.services.authorization import user_token, github_json
+    token = user_token(current_user)
+    items = []
+    for page in range(1, 101):
+        data = github_json(token, "/user/installations", params={"per_page": 100, "page": page})
+        batch = data.get("installations") if isinstance(data, dict) else None
+        if not isinstance(batch, list):
+            raise HTTPException(502, "Invalid installation response from GitHub.")
+        items.extend(batch)
+        total = data.get("total_count")
+        if (isinstance(total, int) and len(items) >= total) or (total is None and len(batch) < 100):
+            break
+        if not batch:
+            raise HTTPException(502, "Incomplete installation response from GitHub. Access was not changed.")
+    else:
+        raise HTTPException(502, "Too many installation pages. Access was not changed.")
+    try:
+        _sync_installations(db, current_user, token, items)
+    except HTTPException:
+        db.rollback()
+        raise
+    except (KeyError, ValueError, TypeError) as exc:
+        db.rollback()
+        raise HTTPException(502, "Invalid installation metadata from GitHub.") from exc
+    return get_me(current_user)
 
 
 @router.post("/logout")

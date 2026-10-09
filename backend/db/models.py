@@ -109,6 +109,18 @@ class Review(Base):
     )
 
 
+class ReviewProgress(Base):
+    """Actual execution boundaries, retained separately from final findings."""
+    __tablename__ = "review_progress"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_id: Mapped[int] = mapped_column(ForeignKey("reviews.id", ondelete="CASCADE"), index=True)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    stage: Mapped[str] = mapped_column(String(32), nullable=False)
+    agent: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
 class Finding(Base):
     """A single issue surfaced by one of the specialist agents during a review."""
 

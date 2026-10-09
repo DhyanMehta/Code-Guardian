@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     github_app_private_key_path: str = ""
     github_app_client_id: str = ""
     github_app_client_secret: str = ""
+    github_app_slug: str = ""
 
     # Dashboard session JWTs (HS256).
     session_secret: str = ""

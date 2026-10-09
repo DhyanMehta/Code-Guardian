@@ -81,6 +81,40 @@ def test_complete_success() -> None:
     assert create.calls == 1
 
 
+def test_agent_metrics_count_retries_and_reported_usage(monkeypatch, caplog):
+    from backend.tools.llm_metrics import agent_metrics
+    # Alembic's logging configuration in migration tests disables existing loggers.
+    monkeypatch.setattr('backend.tools.llm_metrics.logger.disabled', False)
+    monkeypatch.setattr('backend.tools.llm_client.time.sleep', lambda _: None)
+    response = _completion('ok')
+    response.usage = SimpleNamespace(total_tokens=42)
+    client = _make_client(_FakeCreate([APIConnectionError(request=_REQ), response]), max_retries=1)
+    with caplog.at_level('INFO'), agent_metrics('security') as metrics:
+        assert client.complete(system_prompt='private-system', user_prompt='private-code') == 'ok'
+    assert metrics['calls'] == 1
+    assert metrics['requests'] == 2
+    assert metrics['retries'] == 1
+    assert metrics['responses_with_usage'] == 1
+    assert metrics['reported_total_tokens'] == 42
+    assert metrics['retry_wait_seconds'] == 0.5
+    assert 'private-code' not in caplog.text
+    assert 'private-system' not in caplog.text
+    assert 'agent_llm_metrics' in caplog.text
+
+
+def test_agent_metrics_are_isolated_and_unknown_usage_is_explicit():
+    from concurrent.futures import ThreadPoolExecutor
+    from backend.tools.llm_metrics import agent_metrics, measure
+    def run(name):
+        with agent_metrics(name) as metrics:
+            measure('calls', 2)
+        return metrics
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        metrics = list(pool.map(run, ['quality', 'documentation']))
+    assert [m['calls'] for m in metrics] == [2, 2]
+    assert all(m['responses_with_usage'] == 0 for m in metrics)
+
+
 def test_retry_then_success(monkeypatch: pytest.MonkeyPatch) -> None:
     slept: list[float] = []
     monkeypatch.setattr("backend.tools.llm_client.time.sleep", lambda d: slept.append(d))

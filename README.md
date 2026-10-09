@@ -78,6 +78,7 @@ copy .env.example .env      # then edit .env and fill in real values
 Required keys (see `.env.example` for descriptions):
 - `GROQ_API_KEY` — Groq API key for LLM triage/explanation
 - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` — GitHub App credentials
+- `GITHUB_APP_SLUG` — public app slug for first-time installation. Configure the GitHub App setup URL to return to `http://localhost:5173/auth/install` for local development. The return page refreshes access automatically with the existing session; another sign-in is needed only if credentials expire.
 - `SESSION_SECRET` — dashboard session signing key
 - `TOKEN_ENCRYPTION_KEY` — stable Fernet key for encrypted user credentials
 - `GITHUB_WEBHOOK_SECRET` — shared HMAC secret for webhook verification
@@ -86,7 +87,8 @@ Required keys (see `.env.example` for descriptions):
 - `CORS_ALLOWED_ORIGINS` — browser origins for the dashboard (default: localhost:5173)
 
 The frontend uses `frontend/.env` with `VITE_API_BASE_URL` (defaults to
-`http://127.0.0.1:8080`). This is the single source of truth for the backend
+`http://localhost:8080`). Use `http://localhost:5173` in the browser as well so
+GitHub OAuth and session cookies use the same hostname. This is the single source of truth for the backend
 URL — change it here if the backend runs on a different port.
 
 ## Run the backend (venv active)
@@ -115,6 +117,11 @@ python -m backend.worker
 ```
 
 The API only queues reviews. A worker is required for analysis and delivery retries.
+
+If a review stays queued, check `http://localhost:8080/health/ready`. All four
+checks (database, chromadb, worker, configuration) must be `ok`; a 503 with
+`worker: unavailable` means no recent worker heartbeat. Keep the worker terminal
+running alongside the API and frontend. Refreshing the page does not start it.
 See [backend reliability and verification](docs/BACKEND_RELIABILITY.md) for the
 updated flow, compatibility changes, and validation commands.
 - Liveness:  `GET http://localhost:8080/health/live`

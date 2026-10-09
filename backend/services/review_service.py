@@ -176,12 +176,16 @@ def _run_review_body(db, review, *, installation_id=None):
         checkout_kwargs["base_ref"] = review.base_ref
 
     try:
+        from backend.services.progress import recorder
+        progress = recorder(db.get_bind(), review.id, review.attempt)
+        progress("checkout", "started")
         with checkout_pr(
             review.repo_full_name,
             review.commit_sha or "",
             github_token,
             **checkout_kwargs,
         ) as workspace_ctx:
+            progress("checkout", "ok")
             logger.info("Review %d waiting for global review lock", review_id)
             with _review_run_lock:
                 logger.info("Review %d acquired global review lock", review_id)
@@ -241,9 +245,14 @@ def _execute_graph_and_persist(
         "agent_outcomes": {},
     }
 
-    graph = build_supervisor_graph()
+    from backend.services.progress import recorder
+    progress = recorder(db.get_bind(), review.id, review.attempt or 0)
+    # Release the read transaction before parallel progress writers start.
+    db.commit()
+    progress("analysis", "started")
+    graph = build_supervisor_graph(progress=progress)
     final_state = graph.invoke(initial_state)
-
+    progress("aggregation", "started")
     report = aggregate(final_state)
     _persist_findings(db, review, report)
     _persist_agent_runs(db, review, final_state, report)
@@ -259,6 +268,9 @@ def _execute_graph_and_persist(
     review.status = "completed"
     review.summary = _build_summary(report)
     review.completed_at = _utcnow()
+    from backend.db.models import ReviewProgress
+    db.add(ReviewProgress(review_id=review.id, attempt=review.attempt or 0,
+        stage="aggregation", status="ok"))
     db.commit()
     deliver_report(db, review)
 

@@ -291,7 +291,7 @@ class SecurityAgent:
         current = []
         size = 0
         for finding in result.raw_findings:
-            length = len(json.dumps(finding.to_prompt_dict()))
+            length = len(json.dumps(finding.to_prompt_dict(), separators=(',', ':'))) + 1
             if length > 5000:
                 result.mark_degraded("A scanner finding exceeds the triage input budget; raw evidence is retained.")
                 continue
@@ -325,7 +325,7 @@ class SecurityAgent:
 
         by_fingerprint = {f.fingerprint: f for f in result.raw_findings}
         user_prompt = json.dumps(
-            [f.to_prompt_dict() for f in result.raw_findings], indent=2
+            [f.to_prompt_dict() for f in result.raw_findings], separators=(',', ':')
         )
 
         try:

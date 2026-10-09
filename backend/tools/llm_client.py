@@ -36,6 +36,7 @@ from groq import (
 )
 
 from backend.config import get_settings
+from backend.tools.llm_metrics import measure
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +197,7 @@ class TokenBucketLimiter:
                 wait_time,
             )
             t_before_sleep = time.monotonic()
+            measure('token_wait_seconds', wait_time)
             time.sleep(wait_time)
             t_after_sleep = time.monotonic()
 
@@ -297,6 +299,7 @@ def _throttled_call():
     global _last_call_started_at
 
     gate = _get_call_gate()
+    gate_started = time.monotonic()
     gate.acquire()
     try:
         interval = get_settings().llm_min_call_interval_seconds
@@ -309,6 +312,7 @@ def _throttled_call():
                     logger.debug("Throttling LLM call: sleeping %.2fs", wait)
                     time.sleep(wait)
                 _last_call_started_at = time.monotonic()
+        measure('gate_wait_seconds', max(0.0, time.monotonic() - gate_started))
         yield
     finally:
         gate.release()
@@ -408,6 +412,7 @@ class LLMClient:
                 rejected as invalid.
             LLMError: any other provider error.
         """
+        measure('calls')
         if json_mode:
             system_prompt += (
                 "\n\nIMPORTANT: You must output ONLY valid JSON. "
@@ -440,6 +445,7 @@ class LLMClient:
         with _throttled_call():
             reservation_ts = uuid.uuid4().hex
             limiter.acquire(estimated_tokens, reservation_id=reservation_ts)
+            measure('estimated_reserved_tokens', estimated_tokens)
             return self._complete_with_retries(
                 create_kwargs,
                 estimated_tokens=estimated_tokens,
@@ -464,6 +470,7 @@ class LLMClient:
             try:
                 for gen_attempt in range(3):
                     try:
+                        measure('requests')
                         response = self._client.chat.completions.create(**create_kwargs)
                         break
                     except (BadRequestError, openai.BadRequestError) as exc:
@@ -493,9 +500,12 @@ class LLMClient:
                                 retry_delay,
                             )
                             if retry_delay > 0:
+                                measure('retry_wait_seconds', retry_delay)
                                 time.sleep(retry_delay)
                             reservation_ts = uuid.uuid4().hex
                             limiter.acquire(estimated_tokens, reservation_id=reservation_ts)
+                            measure('estimated_reserved_tokens', estimated_tokens)
+                            measure('retries')
                             continue
 
                         # If not an empty generation, or retries exhausted, raise it up
@@ -503,6 +513,8 @@ class LLMClient:
 
                 actual_tokens = self._extract_total_tokens(response)
                 if actual_tokens is not None:
+                    measure('responses_with_usage')
+                    measure('reported_total_tokens', actual_tokens)
                     limiter.reconcile(reservation_ts, estimated_tokens, actual_tokens)
                 return self._extract_content(response)
             except (AuthenticationError, PermissionDeniedError, openai.AuthenticationError, openai.PermissionDeniedError) as exc:
@@ -543,9 +555,12 @@ class LLMClient:
                         exc,
                         delay,
                     )
+                    measure('retry_wait_seconds', delay)
                     time.sleep(delay)
                     reservation_ts = uuid.uuid4().hex
                     limiter.acquire(estimated_tokens, reservation_id=reservation_ts)
+                    measure('estimated_reserved_tokens', estimated_tokens)
+                    measure('retries')
                     continue
                 # Retries exhausted.
                 if isinstance(exc, (RateLimitError, openai.RateLimitError)):

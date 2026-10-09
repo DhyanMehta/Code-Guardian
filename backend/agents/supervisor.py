@@ -197,14 +197,27 @@ def _aggregate(state: ReviewState) -> dict[str, Any]:
     return {}
 
 
-def build_supervisor_graph() -> StateGraph:
+def build_supervisor_graph(progress=None) -> StateGraph:
     """Construct and compile the supervisor StateGraph."""
     graph = StateGraph(ReviewState)
 
-    graph.add_node("security", _run_security_node)
-    graph.add_node("quality", _run_quality_node)
-    graph.add_node("test_gap", _run_test_gap_node)
-    graph.add_node("documentation", _run_documentation_node)
+    def tracked(name, node):
+        def execute(state):
+            from backend.tools.llm_metrics import agent_metrics
+            if progress:
+                progress("agent", "started", name)
+            pr = state.get("pr")
+            with agent_metrics(name, repo=pr.repo_full_name if pr else None,
+                               pr=pr.pr_number if pr else None, revision=pr.head_sha if pr else None):
+                result = node(state)
+            if progress:
+                progress("agent", result["agent_outcomes"][name], name)
+            return result
+        return execute
+    graph.add_node("security", tracked("security", _run_security_node))
+    graph.add_node("quality", tracked("quality", _run_quality_node))
+    graph.add_node("test_gap", tracked("test_gap", _run_test_gap_node))
+    graph.add_node("documentation", tracked("documentation", _run_documentation_node))
     graph.add_node("aggregate", _aggregate)
 
     graph.add_conditional_edges(START, _fan_out)

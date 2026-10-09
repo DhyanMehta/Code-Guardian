@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from backend.api import auth, autofix, health, installations, metrics, reviews, standards, webhooks
+from backend.api import auth, autofix, health, installations, metrics, reviews, standards, webhooks, profile
 from backend.config import get_settings
 
 logging.basicConfig(level=logging.INFO)
@@ -73,6 +73,7 @@ app.include_router(autofix.router)
 app.include_router(auth.router)
 app.include_router(installations.router)
 app.include_router(standards.router)
+app.include_router(profile.router)
 
 
 @app.get("/", tags=["meta"])

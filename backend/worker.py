@@ -50,6 +50,8 @@ def terminate_attempt(process):
 
 
 def run_next(did_review=None):
+    # Spawned workers do not inherit the parent's logging configuration.
+    logging.basicConfig(level=logging.INFO)
     if os.name != "nt" and multiprocessing.current_process().name != "MainProcess":
         os.setsid()
     from backend.db.database import get_engine, get_sessionmaker
