@@ -4,12 +4,26 @@ from __future__ import annotations
 
 import json
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 import jwt
 from starlette.testclient import TestClient
 
 from backend.db.models import Installation, User, UserInstallation
 from backend.tests.conftest import _TestSessionLocal
+
+
+def test_github_signin_offers_account_selection_and_preserves_csrf_state(client):
+    with patch('backend.api.auth.get_settings') as settings:
+        settings.return_value.github_app_client_id = 'client-id'
+        settings.return_value.cookie_secure = False
+        response = client.get('/auth/github/login')
+    assert response.status_code == 200
+    payload = response.json()
+    query = parse_qs(urlparse(payload['url']).query)
+    assert query['prompt'] == ['select_account']
+    assert query['state'] == [response.cookies['oauth_state']]
+    assert query['client_id'] == ['client-id']
 
 
 def test_github_login_returns_url_and_state(client: TestClient) -> None:

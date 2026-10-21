@@ -143,7 +143,7 @@ agent status + auto-fix panel), and code-health trends.
 ```bash
 docker compose up --build
 ```
-Starts `postgres`, a one-shot `migrate` initializer, `backend` (port 8000), and
+Starts `postgres`, a one-shot `migrate` initializer, `backend` (host port 8080), and
 `worker`. API and worker share a persistent Chroma volume. Chroma runs embedded;
 there is no separate Chroma server. Mount the GitHub App private key using
 `GITHUB_APP_PRIVATE_KEY_PATH`. The backend image bundles the three scanners.
@@ -195,3 +195,21 @@ is intended for **local development only** — do not expose these services to t
 internet without adding proper authentication, TLS, and network hardening.
 
 The auto-fix branch never merges automatically — explicit human approval is mandatory.
+
+### GitHub App sign-in and installation redirects
+
+CodeGuardian authorizes users before sending them to repository selection. Configure the
+GitHub App registration with these distinct local-development destinations:
+
+- Callback URL: `http://localhost:5173/auth/callback`
+- Request user authorization (OAuth) during installation: **disabled**
+- Setup URL: `http://localhost:5173/auth/install`
+- Redirect on update: **enabled**
+- App visibility: public when other accounts need to install it.
+- Set `GITHUB_APP_SLUG` explicitly in the server environment; restart the API after changing it.
+
+Use the same frontend hostname throughout sign-in. Production must use the corresponding
+HTTPS URLs. Installation return parameters are navigation hints only: the backend verifies
+access through the authenticated user's GitHub API credentials. An incomplete callback
+never bypasses OAuth state validation. The recovery page checks an existing session or
+starts a fresh sign-in before resuming installation verification.

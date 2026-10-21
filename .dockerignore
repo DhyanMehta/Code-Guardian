@@ -12,6 +12,9 @@
 
 # Secrets — never bake into an image.
 .env
+**/.env
+**/*.pem
+backend/secrets/
 
 # Runtime artifacts.
 chroma_db/

@@ -8,7 +8,7 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     ports:
-      - "8000:8000"
+      - "8080:8000"
     environment:
       # Use Compose PostgreSQL and the shared local Chroma volume.
       DATABASE_URL: postgresql+psycopg2://guardian:guardian@postgres:5432/codeguardian
@@ -19,6 +19,7 @@ services:
       GITHUB_APP_ID: ${GITHUB_APP_ID:-0}
       GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID:-}
       GITHUB_APP_CLIENT_SECRET: ${GITHUB_APP_CLIENT_SECRET:-}
+      GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
       GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
       SESSION_SECRET: ${SESSION_SECRET:-}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}

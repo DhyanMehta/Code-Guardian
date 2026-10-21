@@ -11,7 +11,7 @@ export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement>
 }
 
 const variantStyles: Record<IconButtonVariant, string> = {
-  'solid-neutral': 'bg-neutral-800 hover:bg-neutral-700 active:bg-neutral-750 text-neutral-200 border border-neutral-700/80',
+  'solid-neutral': 'bg-neutral-800 hover:bg-neutral-700 active:bg-neutral-850 text-neutral-200 border border-neutral-700/80',
   'solid-primary': 'bg-primary-500 hover:bg-primary-600 active:bg-primary-700 text-neutral-white border border-primary-600',
   'solid-danger': 'bg-severity-critical-bg hover:bg-severity-critical-border text-severity-critical-text border border-severity-critical-border',
 };

@@ -137,7 +137,7 @@ def github_login(response: Response) -> dict[str, str]:
     )
     url = (
         f"https://github.com/login/oauth/authorize"
-        f"?client_id={client_id}&state={state}"
+        f"?client_id={client_id}&state={state}&prompt=select_account"
     )
     return {"url": url, "state": state}
 
@@ -352,7 +352,12 @@ def _sync_installations(db: Session, user: User, token: str, installations_data:
         inst_row.uninstalled_at = None
         if "suspended_at" in inst_item:
             value = inst_item["suspended_at"]
-            inst_row.suspended_at = datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
+            if value is not None and not isinstance(value, str):
+                raise HTTPException(502, 'Invalid installation suspension metadata from GitHub.')
+            try:
+                inst_row.suspended_at = datetime.fromisoformat(value.replace("Z", "+00:00")) if value is not None else None
+            except ValueError as exc:
+                raise HTTPException(502, 'Invalid installation suspension metadata from GitHub.') from exc
 
         # Link user to installation
         existing_link = (

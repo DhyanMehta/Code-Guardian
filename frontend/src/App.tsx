@@ -10,7 +10,7 @@ import { ReviewDetailPage } from './pages/ReviewDetailPage';
 import { AuthCallbackPage } from './pages/AuthCallbackPage';
 import { InstallationProvider } from './context/InstallationContext';
 import { ProfilePage } from './pages/ProfilePage';
-import { OnboardingPage } from './pages/OnboardingPage';
+import { InstallationReturnPage } from './pages/InstallationReturnPage';
 
 export const App: React.FC = () => {
   return (
@@ -21,7 +21,7 @@ export const App: React.FC = () => {
           {/* Public Home Page */}
           <Route path="/" element={<HomePage />} />
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
-          <Route path="/auth/install" element={<ProtectedRoute><OnboardingPage /></ProtectedRoute>} />
+          <Route path="/auth/install" element={<InstallationReturnPage />} />
           <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
           <Route path="/reviews/:reviewId" element={<ProtectedRoute><ReviewDetailPage /></ProtectedRoute>} />
 

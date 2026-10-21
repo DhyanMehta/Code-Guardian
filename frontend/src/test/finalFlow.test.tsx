@@ -1,6 +1,7 @@
 import {cleanup,render,screen,fireEvent} from '@testing-library/react';
 import {afterEach,it,expect,vi} from 'vitest';
 import {MemoryRouter} from 'react-router-dom';
+import {StrictMode} from 'react';
 import App from '../App';
 import {backend,json,user,review} from './fixtures';
 import {clearResources} from '../api/resources';
@@ -21,10 +22,24 @@ it('sends a first-time user to the server-owned GitHub installer only once',asyn
 it('automatically reconciles installation return without a second OAuth login',async()=>{
   const fetch=vi.fn((url:string)=>Promise.resolve(url.endsWith('/auth/me')?json({...user,installations:[]}):url.endsWith('/auth/installations/refresh')?json(user):url.endsWith('/auth/installation-url')?json({url:'https://github.com/apps/guardian/installations/new'}):backend(url)));
   vi.stubGlobal('fetch',fetch);
-  render(<MemoryRouter initialEntries={['/auth/install?installation_id=999&setup_action=install']}><App/></MemoryRouter>);
+  render(<StrictMode><MemoryRouter initialEntries={['/auth/install?installation_id=999&setup_action=install']}><App/></MemoryRouter></StrictMode>);
   expect(await screen.findByText('owner/httpx')).toBeInTheDocument();
   expect(fetch.mock.calls.filter(([u])=>u.endsWith('/auth/installations/refresh'))).toHaveLength(1);
   expect(fetch.mock.calls.some(([u])=>u.endsWith('/auth/github/login'))).toBe(false);
+});
+it('keeps cancelled or approval-pending installation recoverable without redirect loops',async()=>{
+  const assign=vi.spyOn(navigation,'assign').mockImplementation(()=>{});
+  vi.stubGlobal('fetch',vi.fn((url:string)=>Promise.resolve(url.endsWith('/auth/me') || url.endsWith('/auth/installations/refresh')?json({...user,installations:[]}):url.endsWith('/auth/installation-url')?json({url:'https://github.com/apps/guardian/installations/new'}):backend(url))));
+  render(<MemoryRouter initialEntries={['/auth/install?setup_action=request']}><App/></MemoryRouter>);
+  expect(await screen.findByText(/No accessible installation was found/)).toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'Refresh GitHub access'})).toBeEnabled();
+  expect(assign).not.toHaveBeenCalled();
+});
+it('offers a retry after installation access refresh fails',async()=>{
+  vi.stubGlobal('fetch',vi.fn((url:string)=>Promise.resolve(url.endsWith('/auth/me')?json({...user,installations:[]}):url.endsWith('/auth/installations/refresh')?json({detail:'GitHub access temporarily unavailable'},502):url.endsWith('/auth/installation-url')?json({url:'https://github.com/apps/guardian/installations/new'}):backend(url))));
+  render(<MemoryRouter initialEntries={['/auth/install?setup_action=install']}><App/></MemoryRouter>);
+  expect(await screen.findByRole('alert')).toHaveTextContent('GitHub access temporarily unavailable');
+  expect(screen.getByRole('button',{name:'Refresh GitHub access'})).toBeEnabled();
 });
 it('keeps profile mode read-only without administered installations',async()=>{
   vi.stubGlobal('fetch',vi.fn((url:string)=>Promise.resolve(url.endsWith('/profile/review-mode')?json({installations:[],review_mode:null,version:'empty'}):backend(url))));

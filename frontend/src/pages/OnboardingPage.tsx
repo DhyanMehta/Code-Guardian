@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
-import { useAuth, navigation } from '../context/AuthContext';
+import { useAuth, navigation, installationResumeKey } from '../context/AuthContext';
 import { useResource } from '../api/resources';
 import { endpoints } from '../api/endpoints';
 import { AsyncState } from '../components/common/AsyncState';
@@ -13,7 +13,7 @@ export function OnboardingPage() {
   const [checked,setChecked] = useState(false);
   const refresh = async () => {
     setChecking(true); setError(null);
-    try { await refreshInstallations(); setChecked(true); }
+    try { await refreshInstallations(); sessionStorage.removeItem(installationResumeKey); setChecked(true); }
     catch (e) { setError(e instanceof Error ? e.message : 'Could not refresh GitHub access. Try again.'); }
     finally { setChecking(false); }
   };

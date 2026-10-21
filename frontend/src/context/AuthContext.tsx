@@ -5,6 +5,7 @@ import { safeReturnPath } from '../api/identity';
 import { clearResources, invalidateResources } from '../api/resources';
 import { clearWriteStates } from '../api/writes';
 const returnKey = 'codeguardian:return-to';
+export const installationResumeKey = 'codeguardian:resume-installation';
 const exchanges = new Map<string, Promise<UserProfile>>();
 export const navigation = { assign: (url: string) => window.location.assign(url) };
 interface AuthContextType {
@@ -60,7 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await request('/auth/github/callback', parseCallback, { method: 'POST', body: { code, state }, auth: false });
       return request('/auth/me', parseUser, { auth: false });
     })());
-    try { const next = await exchanges.get(key)!; if (ticket === generation.current) { accept(next); invalidateResources(`u:${next.id}:`); } return next.installations.length ? safeReturnPath(sessionStorage.getItem(returnKey)) : '/auth/install'; }
+    try { const next = await exchanges.get(key)!; if (ticket === generation.current) { accept(next); invalidateResources(`u:${next.id}:`); } return sessionStorage.getItem(installationResumeKey) ? '/auth/install?setup_action=resume' : next.installations.length ? safeReturnPath(sessionStorage.getItem(returnKey)) : '/auth/install'; }
     catch (e) { if (ticket === generation.current) { accept(null); setAuthError(errorMessage(e)); } throw e; }
     finally { if (ticket === generation.current) setLoading(false); }
   }, [accept]);
