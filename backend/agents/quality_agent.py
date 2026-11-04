@@ -236,7 +236,7 @@ class QualityAgent:
         excluded: set[str] = set()
         for chunk in chunks:
             paths = parse_diff_hunks(chunk)
-            if paths and all(Path(path).name.lower() in {"openapi.json", "swagger.json"}
+            if paths and all(Path(path).suffix.lower() != ".py"
                              or {"generated", "vendor"}.intersection(Path(path).parts)
                              for path in paths):
                 excluded.update(paths)
@@ -246,7 +246,7 @@ class QualityAgent:
             else:
                 batches.append(chunk)
         if excluded:
-            result.mark_degraded("Quality review excludes schema exports and generated/vendor paths.")
+            result.mark_degraded("Quality coverage excludes non-Python and generated/vendor files.")
             result.notes.append("Excluded from Quality: " + ", ".join(sorted(excluded)))
         findings = []
         from backend.tools.review_budget import remaining

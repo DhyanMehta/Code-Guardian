@@ -58,3 +58,14 @@ def test_provider_slot_wait_respects_agent_deadline(monkeypatch):
             future.result(timeout=1)
         finally:
             gate.release()
+
+def test_quality_skips_unsupported_diff_before_retrieval():
+    from backend.agents.quality_agent import QualityAgent
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Unsupported TypeScript reached standards retrieval")
+
+    diff = "diff --git a/App.tsx b/App.tsx\n--- a/App.tsx\n+++ b/App.tsx\n@@ -0,0 +1 @@\n+export const value = 1;\n"
+    result = QualityAgent(retriever_fn=unexpected).run(diff, ["App.tsx"])
+    assert result.outcome.value == "degraded"
+    assert result.notes == ["Excluded from Quality: App.tsx"]
