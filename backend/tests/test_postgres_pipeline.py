@@ -27,6 +27,7 @@ pytestmark = pytest.mark.skipif(os.getenv("CODEGUARDIAN_TEST_POSTGRES") != "1", 
 @pytest.fixture
 def pg(monkeypatch):
     schema = "cg_test_" + uuid.uuid4().hex
+    monkeypatch.setattr(worker, "LOCK_ID", int(schema[-15:], 16))
     admin = create_engine(get_settings().database_url, connect_args={"connect_timeout": 5})
     with admin.begin() as conn:
         conn.execute(text(f'CREATE SCHEMA "{schema}"'))
@@ -166,3 +167,18 @@ def test_real_agents_git_rag_and_saved_report(pg, tmp_path, monkeypatch):
         assert len([event for event in events if event.stage == 'agent' and event.status == 'ok']) == 4
         assert "evaluate" in review.report_markdown
         assert "No issues found" not in review.report_markdown
+
+def test_checkpoint_roundtrip_preserves_scanner_evidence(pg):
+    from backend.services.agent_checkpoints import AgentCheckpoints
+    from backend.tools.results import RawFinding, Severity
+
+    engine, factory, _ = pg
+    with factory() as db:
+        review = create_review(db, repo_full_name="test/repo", pr_number=1, head_sha="a")
+        review_id = review.id
+    result = {"agent_outcomes": {"security": "ok"}, "raw_findings": {
+        "security": [RawFinding("bandit", "B101", "assert used", Severity.LOW, "app.py", 1)]
+    }}
+    AgentCheckpoints(engine, review_id, "a").save("security", result)
+    assert AgentCheckpoints(engine, review_id, "a").load("security") == result
+    assert AgentCheckpoints(engine, review_id, "b").load("security") is None

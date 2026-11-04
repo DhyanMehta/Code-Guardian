@@ -12,9 +12,11 @@ than re-deriving it (badly) from which agents happen to have findings.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import threading
+from time import monotonic
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text, update
@@ -141,6 +143,8 @@ def run_review(db: Session, review_id: int, *, installation_id: int | None = Non
 
 def _run_review_body(db, review, *, installation_id=None):
     review_id = review.id
+    timeout = get_settings().review_timeout_seconds
+    analysis_deadline = monotonic() + timeout - min(120, timeout / 4)
     if installation_id:
         inst = db.get(Installation, installation_id)
         if inst and (inst.suspended_at or inst.uninstalled_at):
@@ -191,7 +195,7 @@ def _run_review_body(db, review, *, installation_id=None):
                 logger.info("Review %d acquired global review lock", review_id)
                 _execute_graph_and_persist(
                     db, review, workspace_ctx.path,
-                    installation_id=installation_id,
+                    installation_id=installation_id, analysis_deadline=analysis_deadline,
                 )
     except Exception as exc:
         logger.exception("Review %d failed: %s", review_id, exc)
@@ -208,6 +212,7 @@ def _execute_graph_and_persist(
     workspace_path: str,
     *,
     installation_id: int | None = None,
+    analysis_deadline: float | None = None,
 ) -> None:
     """Invoke the supervisor graph and persist results."""
     changed_files = _get_changed_files(
@@ -250,7 +255,15 @@ def _execute_graph_and_persist(
     # Release the read transaction before parallel progress writers start.
     db.commit()
     progress("analysis", "started")
-    graph = build_supervisor_graph(progress=progress)
+    from backend.services.agent_checkpoints import AgentCheckpoints
+    settings = get_settings()
+    identity = [1, installation_id, review.repo_full_name, review.commit_sha,
+                review.base_sha, review.standards_version, diff, settings.llm_provider,
+                settings.groq_model, settings.gemini_model, settings.llm_tpm_limit]
+    fingerprint = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+    checkpoints = AgentCheckpoints(db.get_bind(), review.id, fingerprint)
+    graph = build_supervisor_graph(progress=progress, analysis_deadline=analysis_deadline,
+                                   checkpoints=checkpoints)
     final_state = graph.invoke(initial_state)
     progress("aggregation", "started")
     report = aggregate(final_state)

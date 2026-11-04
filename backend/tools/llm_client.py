@@ -48,6 +48,26 @@ class LLMError(Exception):
     """Base class for LLM client failures."""
 
 
+class LLMBudgetError(LLMError):
+    """The review cannot afford to wait for another provider operation."""
+
+
+def _budget_timeout(cap: float) -> float:
+    from backend.tools.review_budget import remaining
+    left = remaining()
+    if left is None:
+        return cap
+    if left <= 0:
+        raise LLMBudgetError("Review analysis deadline reached.")
+    return min(cap, left)
+
+
+def _budget_sleep(delay: float) -> None:
+    if _budget_timeout(delay) < delay:
+        raise LLMBudgetError("Provider wait exceeds the remaining review budget.")
+    time.sleep(delay)
+
+
 class LLMConfigError(LLMError):
     """The client is misconfigured (e.g. missing API key)."""
 
@@ -161,6 +181,7 @@ class TokenBucketLimiter:
         """
         if estimated_tokens > self.safe_tpm:
             raise LLMRateLimitError("Request exceeds configured token budget; split the input.")
+        max_wait = _budget_timeout(max_wait)
         start_time = time.monotonic()
         while True:
             with self._lock:
@@ -198,7 +219,7 @@ class TokenBucketLimiter:
             )
             t_before_sleep = time.monotonic()
             measure('token_wait_seconds', wait_time)
-            time.sleep(wait_time)
+            _budget_sleep(wait_time)
             t_after_sleep = time.monotonic()
 
             with self._lock:
@@ -300,7 +321,11 @@ def _throttled_call():
 
     gate = _get_call_gate()
     gate_started = time.monotonic()
-    gate.acquire()
+    from backend.tools.review_budget import remaining
+    left = remaining()
+    acquired = gate.acquire() if left is None else gate.acquire(timeout=left)
+    if not acquired:
+        raise LLMBudgetError("Review budget exhausted waiting for the provider slot.")
     try:
         interval = get_settings().llm_min_call_interval_seconds
         if interval > 0:
@@ -310,7 +335,7 @@ def _throttled_call():
                 wait = interval - (time.monotonic() - _last_call_started_at)
                 if wait > 0:
                     logger.debug("Throttling LLM call: sleeping %.2fs", wait)
-                    time.sleep(wait)
+                    _budget_sleep(wait)
                 _last_call_started_at = time.monotonic()
         measure('gate_wait_seconds', max(0.0, time.monotonic() - gate_started))
         yield
@@ -471,7 +496,11 @@ class LLMClient:
                 for gen_attempt in range(3):
                     try:
                         measure('requests')
-                        response = self._client.chat.completions.create(**create_kwargs)
+                        from backend.tools.review_budget import remaining
+                        request_kwargs = dict(create_kwargs)
+                        if remaining() is not None:
+                            request_kwargs["timeout"] = _budget_timeout(self.timeout)
+                        response = self._client.chat.completions.create(**request_kwargs)
                         break
                     except (BadRequestError, openai.BadRequestError) as exc:
                         is_empty_gen = False
@@ -501,7 +530,7 @@ class LLMClient:
                             )
                             if retry_delay > 0:
                                 measure('retry_wait_seconds', retry_delay)
-                                time.sleep(retry_delay)
+                                _budget_sleep(retry_delay)
                             reservation_ts = uuid.uuid4().hex
                             limiter.acquire(estimated_tokens, reservation_id=reservation_ts)
                             measure('estimated_reserved_tokens', estimated_tokens)
@@ -509,7 +538,7 @@ class LLMClient:
                             continue
 
                         # If not an empty generation, or retries exhausted, raise it up
-                        raise LLMResponseError(f"request rejected as invalid: {exc}") from exc
+                        raise LLMResponseError("Provider request rejected as invalid or returned invalid JSON.") from exc
 
                 actual_tokens = self._extract_total_tokens(response)
                 if actual_tokens is not None:
@@ -556,7 +585,7 @@ class LLMClient:
                         delay,
                     )
                     measure('retry_wait_seconds', delay)
-                    time.sleep(delay)
+                    _budget_sleep(delay)
                     reservation_ts = uuid.uuid4().hex
                     limiter.acquire(estimated_tokens, reservation_id=reservation_ts)
                     measure('estimated_reserved_tokens', estimated_tokens)

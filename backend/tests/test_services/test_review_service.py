@@ -354,6 +354,12 @@ class TestRunReview:
     @patch("backend.services.review_service.checkout_pr")
     @patch("backend.services.review_service.get_settings")
     def test_successful_run(self, mock_settings, mock_checkout, mock_graph, mock_comment, db_session):
+        from backend.config import get_settings
+
+        settings = get_settings()
+        for field in ("review_timeout_seconds", "llm_provider", "groq_model",
+                      "gemini_model", "llm_tpm_limit"):
+            setattr(mock_settings.return_value, field, getattr(settings, field))
         mock_settings.return_value.require.return_value = "fake-token"
 
         # Mock workspace context manager
@@ -400,6 +406,12 @@ class TestRunReview:
     @patch("backend.services.review_service.checkout_pr")
     @patch("backend.services.review_service.get_settings")
     def test_failed_run_on_checkout_error(self, mock_settings, mock_checkout, db_session):
+        from backend.config import get_settings
+
+        settings = get_settings()
+        for field in ("review_timeout_seconds", "llm_provider", "groq_model",
+                      "gemini_model", "llm_tpm_limit"):
+            setattr(mock_settings.return_value, field, getattr(settings, field))
         mock_settings.return_value.require.return_value = "fake-token"
         mock_checkout.side_effect = RuntimeError("clone failed")
 
@@ -427,6 +439,12 @@ class TestReviewStateTransitions:
     @patch("backend.services.review_service.checkout_pr")
     @patch("backend.services.review_service.get_settings")
     def test_pending_to_running_to_completed(self, mock_settings, mock_checkout, mock_graph, mock_comment, db_session):
+        from backend.config import get_settings
+
+        settings = get_settings()
+        for field in ("review_timeout_seconds", "llm_provider", "groq_model",
+                      "gemini_model", "llm_tpm_limit"):
+            setattr(mock_settings.return_value, field, getattr(settings, field))
         mock_settings.return_value.require.return_value = "fake-token"
         mock_ctx = MagicMock()
         mock_ctx.path = "/tmp/ws"
@@ -456,6 +474,12 @@ class TestReviewStateTransitions:
     @patch("backend.services.review_service.checkout_pr")
     @patch("backend.services.review_service.get_settings")
     def test_pending_to_running_to_failed(self, mock_settings, mock_checkout, db_session):
+        from backend.config import get_settings
+
+        settings = get_settings()
+        for field in ("review_timeout_seconds", "llm_provider", "groq_model",
+                      "gemini_model", "llm_tpm_limit"):
+            setattr(mock_settings.return_value, field, getattr(settings, field))
         mock_settings.return_value.require.return_value = "fake-token"
         mock_checkout.side_effect = Exception("timeout")
 

@@ -298,3 +298,13 @@ class UserInstallation(Base):
     installation: Mapped["Installation"] = relationship(
         back_populates="user_links",
     )
+
+class ReviewAgentCheckpoint(Base):
+    """Validated output of a completed agent for one compatible review."""
+
+    __tablename__ = "review_agent_checkpoints"
+
+    review_id: Mapped[int] = mapped_column(ForeignKey("reviews.id", ondelete="CASCADE"), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent: Mapped[str] = mapped_column(String(32), primary_key=True)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)

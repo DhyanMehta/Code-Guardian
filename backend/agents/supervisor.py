@@ -197,19 +197,33 @@ def _aggregate(state: ReviewState) -> dict[str, Any]:
     return {}
 
 
-def build_supervisor_graph(progress=None) -> StateGraph:
+def build_supervisor_graph(progress=None, *, analysis_deadline=None, checkpoints=None) -> StateGraph:
     """Construct and compile the supervisor StateGraph."""
     graph = StateGraph(ReviewState)
 
     def tracked(name, node):
         def execute(state):
             from backend.tools.llm_metrics import agent_metrics
+            from backend.tools.review_budget import deadline
+            if checkpoints:
+                saved = checkpoints.load(name)
+                if saved is not None:
+                    if progress:
+                        progress("agent", "reused", name)
+                        progress("agent", saved["agent_outcomes"][name], name)
+                    return saved
             if progress:
                 progress("agent", "started", name)
             pr = state.get("pr")
             with agent_metrics(name, repo=pr.repo_full_name if pr else None,
                                pr=pr.pr_number if pr else None, revision=pr.head_sha if pr else None):
-                result = node(state)
+                token = deadline.set(analysis_deadline)
+                try:
+                    result = node(state)
+                finally:
+                    deadline.reset(token)
+            if checkpoints and result["agent_outcomes"][name] == AgentOutcome.OK.value:
+                checkpoints.save(name, result)
             if progress:
                 progress("agent", result["agent_outcomes"][name], name)
             return result

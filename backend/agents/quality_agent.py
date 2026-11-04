@@ -60,7 +60,7 @@ from backend.agents._validation import (
 from backend.agents._diff_utils import parse_diff_hunks, function_overlaps_diff, bounded_diff_batches
 from backend.agents.state import AgentOutcome
 from backend.rag.retriever import DEFAULT_TOP_K, RetrievalResult, retrieve
-from backend.tools.llm_client import LLMClient, LLMConfigError, LLMError
+from backend.tools.llm_client import LLMAuthError, LLMBudgetError, LLMClient, LLMConfigError, LLMError
 
 logger = logging.getLogger(__name__)
 
@@ -231,9 +231,32 @@ class QualityAgent:
         target_inst_id = (
             installation_id if installation_id is not None else self._installation_id
         )
-        batches = bounded_diff_batches(diff, _DIFF_PROMPT_CHARS)
+        chunks = bounded_diff_batches(diff, _DIFF_PROMPT_CHARS)
+        batches: list[str] = []
+        excluded: set[str] = set()
+        for chunk in chunks:
+            paths = parse_diff_hunks(chunk)
+            if paths and all(Path(path).name.lower() in {"openapi.json", "swagger.json"}
+                             or {"generated", "vendor"}.intersection(Path(path).parts)
+                             for path in paths):
+                excluded.update(paths)
+                continue
+            if batches and len(batches[-1]) + len(chunk) + 1 <= _DIFF_PROMPT_CHARS:
+                batches[-1] += "\n" + chunk
+            else:
+                batches.append(chunk)
+        if excluded:
+            result.mark_degraded("Quality review excludes schema exports and generated/vendor paths.")
+            result.notes.append("Excluded from Quality: " + ", ".join(sorted(excluded)))
         findings = []
+        from backend.tools.review_budget import remaining
+
         for index, batch in enumerate(batches):
+            left = remaining()
+            if left is not None and left <= 0:
+                result.mark_degraded("Quality analysis deadline reached.")
+                result.notes.append(f"Processed {index} of {len(batches)} planned batches.")
+                break
             if index >= 20:
                 result.mark_degraded("Quality batch budget reached; some changes were not analyzed.")
                 result.notes.append(f"Analyzed 20 of {len(batches)} batches.")
@@ -256,7 +279,12 @@ class QualityAgent:
                 result.notes.append("No relevant coding-standards passages retrieved; cannot perform quality review for this batch.")
                 continue
             partial = QualityAgentResult()
-            self._review_with_llm(batch, retrieval, partial, changed_files, workspace_path)
+            try:
+                self._review_with_llm(batch, retrieval, partial, batch_files, workspace_path)
+            except (LLMBudgetError, LLMAuthError) as exc:
+                result.mark_degraded(type(exc).__name__)
+                result.notes.append(f"Stopped after {index} of {len(batches)} planned batches.")
+                break
             findings.extend(partial.findings)
             result.notes.extend(partial.notes)
             if partial.outcome is not AgentOutcome.OK:
@@ -400,6 +428,8 @@ class QualityAgent:
                 max_tokens=2048,
                 json_mode=True,
             )
+        except (LLMBudgetError, LLMAuthError):
+            raise
         except LLMError as exc:
             logger.warning("LLM quality review failed: %s", exc)
             result.mark_degraded(f"LLM review failed: {type(exc).__name__}")
