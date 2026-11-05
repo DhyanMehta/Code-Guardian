@@ -12,7 +12,7 @@ import signal
 import subprocess
 import threading
 from datetime import datetime, timezone
-from sqlalchemy import text
+from sqlalchemy import and_, or_, text
 from backend.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,24 @@ def run_next(did_review=None):
                         queued.summary = "Superseded by a newer queued review of this PR."
                     latest.add(key)
                 db.commit()
+                due_delivery = (
+                    db.query(Review)
+                    .filter(
+                        Review.status == "completed",
+                        Review.report_markdown.is_not(None),
+                        Review.delivery_attempts < 3,
+                        or_(
+                            Review.delivery_status == "pending",
+                            and_(Review.delivery_status == "failed",
+                                 Review.delivery_retry_at <= datetime.now(timezone.utc)),
+                        ),
+                    )
+                    .order_by(Review.id)
+                    .first()
+                )
+                if due_delivery:
+                    deliver_report(db, due_delivery)
+                    return
                 review = db.query(Review).filter_by(status="pending").order_by(Review.id).first()
                 if review:
                     if did_review is not None:
@@ -97,10 +115,6 @@ def run_next(did_review=None):
                     finally:
                         stop.set()
                         pulse.join(10)
-                else:
-                    review = db.query(Review).filter(Review.delivery_status.in_(["pending", "failed"]), Review.delivery_attempts < 3).order_by(Review.id).first()
-                    if review:
-                        deliver_report(db, review)
         finally:
             lock_connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": LOCK_ID})
 

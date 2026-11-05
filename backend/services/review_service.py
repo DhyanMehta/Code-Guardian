@@ -255,9 +255,9 @@ def _execute_graph_and_persist(
     # Release the read transaction before parallel progress writers start.
     db.commit()
     progress("analysis", "started")
-    from backend.services.agent_checkpoints import AgentCheckpoints
+    from backend.services.agent_checkpoints import AgentCheckpoints, validation_fingerprint
     settings = get_settings()
-    identity = [1, installation_id, review.repo_full_name, review.commit_sha,
+    identity = ["agent-correctness-v4-ts5.7.3", validation_fingerprint(), installation_id, review.repo_full_name, review.commit_sha,
                 review.base_sha, review.standards_version, diff, settings.llm_provider,
                 settings.groq_model, settings.gemini_model, settings.llm_tpm_limit]
     fingerprint = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
@@ -285,7 +285,6 @@ def _execute_graph_and_persist(
     db.add(ReviewProgress(review_id=review.id, attempt=review.attempt or 0,
         stage="aggregation", status="ok"))
     db.commit()
-    deliver_report(db, review)
 
 
 def _persist_findings(db: Session, review: Review, report: AggregatedReport) -> None:
@@ -367,6 +366,7 @@ def _persist_agent_runs(
                 scanner_statuses=_serialize_scanner_statuses(
                     scanners_by_agent.get(agent_name)
                 ),
+                coverage=json.dumps(state["agent_coverage"][agent_name]) if agent_name in state.get("agent_coverage", {}) else None,
                 raw_findings=json.dumps([f.to_prompt_dict() for f in state.get("raw_findings", {}).get(agent_name, [])]),
             )
         )
@@ -395,7 +395,14 @@ def _build_summary(report: AggregatedReport) -> str:
         by_sev[f.severity.value] = by_sev.get(f.severity.value, 0) + 1
     parts = [f"{c} {s}" for s, c in by_sev.items()]
     succeeded = sum(1 for s in report.agent_statuses if s.succeeded)
+    if report.agent_statuses and all(s.coverage for s in report.agent_statuses):
+        executed = sum(s.coverage["execution"] == "completed" for s in report.agent_statuses)
+        return f"{total} findings ({', '.join(parts)}). {executed}/{len(report.agent_statuses)} agent executions completed; {succeeded}/{len(report.agent_statuses)} with complete applicable coverage."
     return f"{total} findings ({', '.join(parts)}). {succeeded}/{len(report.agent_statuses)} agents succeeded."
+
+
+class StaleDeliveryError(Exception):
+    """The pull request has moved beyond the reviewed revision."""
 
 
 def _post_pr_comment(
@@ -424,6 +431,8 @@ def _post_pr_comment(
         marker = f"<!-- codeguardian-review:{review.id} -->"
         body = marker + "\n" + comment_md
         existing = next((c for c in pr.get_issue_comments() if (c.body or "") == body), None)
+        if existing is None and review.commit_sha and pr.head.sha != review.commit_sha:
+            raise StaleDeliveryError("The PR head changed after this review.")
         comment = existing or pr.create_issue_comment(body)
         review.comment_id = str(comment.id)
         logger.info("Posted PR comment to %s#%d", review.repo_full_name, review.pr_number)
@@ -437,11 +446,27 @@ def _post_pr_comment(
 
 
 def deliver_report(db: Session, review: Review) -> None:
+    if review.status != "completed" or not review.report_markdown:
+        return
+    if review.delivery_status == "posted":
+        return
     review.delivery_attempts = (review.delivery_attempts or 0) + 1
+    review.delivery_status = "failed"
+    review.delivery_error = "Previous GitHub delivery attempt was not confirmed."
+    review.delivery_retry_at = (
+        _utcnow() + timedelta(seconds=30 * 2 ** (review.delivery_attempts - 1))
+        if review.delivery_attempts < 3 else None
+    )
+    db.commit()
     try:
         _post_pr_comment(review, review.report_markdown or "", installation_id=review.installation_id)
         review.delivery_status = "posted"
+        review.delivery_retry_at = None
         review.delivery_error = None
+    except StaleDeliveryError:
+        review.delivery_retry_at = None
+        review.delivery_status = "failed"
+        review.delivery_error = "GitHub delivery skipped because the PR head changed."
     except Exception as exc:
         review.delivery_status = "failed"
         review.delivery_error = f"GitHub delivery failed ({type(exc).__name__})."

@@ -36,7 +36,7 @@ from groq import (
 )
 
 from backend.config import get_settings
-from backend.tools.llm_metrics import measure
+from backend.tools.llm_metrics import measure, provider_wait
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,7 @@ class TokenBucketLimiter:
         # History of (monotonic_timestamp, token_count)
         self._history: list[tuple[float, int]] = []
         self._cooldown_until: float = 0.0
+        self._admission = threading.Lock()
         self._reservations: dict[str, float] = {}
 
     @property
@@ -150,6 +151,25 @@ class TokenBucketLimiter:
         cutoff = now - self.window_seconds
         self._history = [(ts, tokens) for ts, tokens in self._history if ts > cutoff]
         self._reservations = {key: ts for key, ts in self._reservations.items() if ts > cutoff}
+
+    def reserve_request(self, estimated_tokens: int, reservation_id: str) -> None:
+        """Let one request wait for quota without holding an in-flight slot."""
+        acquired = self._admission.acquire(blocking=False)
+        if not acquired:
+            with provider_wait("token"):
+                acquired = self._admission.acquire(timeout=_budget_timeout(MAX_RATE_LIMIT_WAIT * 2))
+        if not acquired:
+            raise LLMRateLimitError("Timed out waiting for token admission.")
+        try:
+            self.acquire(estimated_tokens, reservation_id=reservation_id)
+        finally:
+            self._admission.release()
+
+    def can_send(self, reservation_id: str) -> bool:
+        with self._lock:
+            now = time.monotonic()
+            self._evict_expired(now)
+            return reservation_id in self._reservations and now >= self._cooldown_until
 
     def current_used_tokens(self, now: float | None = None) -> int:
         with self._lock:
@@ -181,7 +201,9 @@ class TokenBucketLimiter:
         """
         if estimated_tokens > self.safe_tpm:
             raise LLMRateLimitError("Request exceeds configured token budget; split the input.")
-        max_wait = _budget_timeout(max_wait)
+        wait_limit = _budget_timeout(max_wait)
+        deadline_limited = wait_limit < max_wait
+        max_wait = wait_limit
         start_time = time.monotonic()
         while True:
             with self._lock:
@@ -205,6 +227,8 @@ class TokenBucketLimiter:
 
             elapsed = time.monotonic() - start_time
             if elapsed + wait_time > max_wait:
+                if deadline_limited:
+                    raise LLMBudgetError("Token wait exceeds the remaining review budget.")
                 raise LLMRateLimitError(
                     f"Token limiter wait cap ({max_wait}s) exceeded: "
                     f"need {estimated_tokens} tokens, currently used {used}/{self.safe_tpm}"
@@ -218,8 +242,9 @@ class TokenBucketLimiter:
                 wait_time,
             )
             t_before_sleep = time.monotonic()
-            measure('token_wait_seconds', wait_time)
-            _budget_sleep(wait_time)
+            category = "cooldown" if cooldown_remaining > 0 else "token"
+            with provider_wait(category):
+                _budget_sleep(wait_time)
             t_after_sleep = time.monotonic()
 
             with self._lock:
@@ -320,10 +345,12 @@ def _throttled_call():
     global _last_call_started_at
 
     gate = _get_call_gate()
-    gate_started = time.monotonic()
     from backend.tools.review_budget import remaining
     left = remaining()
-    acquired = gate.acquire() if left is None else gate.acquire(timeout=left)
+    acquired = gate.acquire(blocking=False)
+    if not acquired:
+        with provider_wait("gate"):
+            acquired = gate.acquire(timeout=MAX_RATE_LIMIT_WAIT if left is None else left)
     if not acquired:
         raise LLMBudgetError("Review budget exhausted waiting for the provider slot.")
     try:
@@ -337,7 +364,6 @@ def _throttled_call():
                     logger.debug("Throttling LLM call: sleeping %.2fs", wait)
                     _budget_sleep(wait)
                 _last_call_started_at = time.monotonic()
-        measure('gate_wait_seconds', max(0.0, time.monotonic() - gate_started))
         yield
     finally:
         gate.release()
@@ -467,16 +493,9 @@ class LLMClient:
         estimated_tokens = estimate_tokens(system_prompt, user_prompt, max_tokens)
         limiter = _get_token_limiter()
 
-        with _throttled_call():
-            reservation_ts = uuid.uuid4().hex
-            limiter.acquire(estimated_tokens, reservation_id=reservation_ts)
-            measure('estimated_reserved_tokens', estimated_tokens)
-            return self._complete_with_retries(
-                create_kwargs,
-                estimated_tokens=estimated_tokens,
-                reservation_ts=reservation_ts,
-                limiter=limiter,
-            )
+        return self._complete_with_retries(
+            create_kwargs, estimated_tokens=estimated_tokens, limiter=limiter,
+        )
 
     def _complete_with_retries(
         self,
@@ -495,12 +514,18 @@ class LLMClient:
             try:
                 for gen_attempt in range(3):
                     try:
-                        measure('requests')
-                        from backend.tools.review_budget import remaining
-                        request_kwargs = dict(create_kwargs)
-                        if remaining() is not None:
-                            request_kwargs["timeout"] = _budget_timeout(self.timeout)
-                        response = self._client.chat.completions.create(**request_kwargs)
+                        reservation_ts = uuid.uuid4().hex
+                        limiter.reserve_request(estimated_tokens, reservation_ts)
+                        measure('estimated_reserved_tokens', estimated_tokens)
+                        with _throttled_call():
+                            if not limiter.can_send(reservation_ts):
+                                raise LLMBudgetError("Provider reservation expired or entered cooldown while waiting for a slot.")
+                            from backend.tools.review_budget import remaining
+                            request_kwargs = dict(create_kwargs)
+                            if remaining() is not None:
+                                request_kwargs["timeout"] = _budget_timeout(self.timeout)
+                            measure('requests')
+                            response = self._client.chat.completions.create(**request_kwargs)
                         break
                     except (BadRequestError, openai.BadRequestError) as exc:
                         is_empty_gen = False
@@ -529,11 +554,8 @@ class LLMClient:
                                 retry_delay,
                             )
                             if retry_delay > 0:
-                                measure('retry_wait_seconds', retry_delay)
-                                _budget_sleep(retry_delay)
-                            reservation_ts = uuid.uuid4().hex
-                            limiter.acquire(estimated_tokens, reservation_id=reservation_ts)
-                            measure('estimated_reserved_tokens', estimated_tokens)
+                                with provider_wait("retry"):
+                                    _budget_sleep(retry_delay)
                             measure('retries')
                             continue
 
@@ -584,11 +606,9 @@ class LLMClient:
                         exc,
                         delay,
                     )
-                    measure('retry_wait_seconds', delay)
-                    _budget_sleep(delay)
-                    reservation_ts = uuid.uuid4().hex
-                    limiter.acquire(estimated_tokens, reservation_id=reservation_ts)
-                    measure('estimated_reserved_tokens', estimated_tokens)
+                    category = "cooldown" if isinstance(exc, (RateLimitError, openai.RateLimitError)) else "retry"
+                    with provider_wait(category):
+                        _budget_sleep(delay)
                     measure('retries')
                     continue
                 # Retries exhausted.

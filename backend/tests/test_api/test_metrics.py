@@ -140,8 +140,8 @@ class TestTrends:
         assert sorted(newest["unrecorded_agents"]) == ["documentation", "test_gap"]
         assert newest["coverage_recorded"] is False
 
-    def test_fully_recorded_clean_review_is_coverage_complete(self, client):
-        """The only state that may be read as a trustworthy clean baseline."""
+    def test_historical_clean_outcomes_do_not_establish_file_coverage(self, client):
+        """Legacy outcome rows cannot establish file-level coverage."""
         session = _TestSessionLocal()
         review = _review(session, pr=9, created=datetime.now(timezone.utc))
         session.add_all([
@@ -156,8 +156,8 @@ class TestTrends:
 
         assert point["degraded_agents"] == []
         assert point["unrecorded_agents"] == []
-        assert point["coverage_recorded"] is True
-        assert point["coverage_complete"] is True
+        assert point["coverage_recorded"] is False
+        assert point["coverage_complete"] is False
 
     def test_unrecognized_outcome_counts_as_unrecorded_not_ok(self, client):
         """An outcome string we do not understand must not be coerced to 'ran cleanly'.

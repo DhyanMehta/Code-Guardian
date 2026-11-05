@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from backend.config import get_settings
-from backend.db.models import Review, ReviewAgentRun, Finding, ReviewProgress
+from backend.db.models import Installation, Review, ReviewAgentRun, Finding, ReviewProgress
 from backend.services.review_service import create_review, _execute_graph_and_persist
 from backend import worker
 
@@ -103,10 +103,16 @@ def test_atomic_report_and_delivery_failure(pg, tmp_path):
             graph.return_value.invoke.return_value = state
             _execute_graph_and_persist(db, review, str(tmp_path))
         db.refresh(review)
-        assert review.status == "completed" and review.delivery_status == "failed"
+        assert review.status == "completed" and review.delivery_status == "pending"
+        with patch("backend.services.review_service._post_pr_comment", side_effect=RuntimeError("delivery down")):
+            worker.run_next()
+        db.refresh(review)
+        assert review.delivery_status == "failed" and review.delivery_retry_at is not None
         assert "No issues found" in review.report_markdown
         assert db.query(ReviewAgentRun).filter_by(review_id=review.id).count() == 4
         snapshot = review.report_markdown
+        review.delivery_retry_at = datetime.now(timezone.utc)
+        db.commit()
         with patch("backend.services.review_service._post_pr_comment"):
             worker.run_next()
         db.refresh(review)
@@ -132,6 +138,20 @@ def test_real_agents_git_rag_and_saved_report(pg, tmp_path, monkeypatch):
     git("commit", "-m", "change")
     head = git("rev-parse", "HEAD")
 
+    # Give this integration its own explicitly relevant standards document. The
+    # session collection is shared with tests that replace uploaded standards.
+    # Retrieval and embeddings remain real, while the fixture is reproducible.
+    from backend.rag.ingest import ingest
+    standards = tmp_path / "fixture_standards"
+    standards.mkdir()
+    (standards / "rules.md").write_text(
+        "# Function rules\n\napp.py defines 1 function(s) and 0 class(es).\n"
+        "function evaluate in app.py is 3 lines long\n"
+        "Functions should not exceed 40 lines of logic.\n", encoding="utf-8")
+    rag_dir = str(tmp_path / "fixture_chroma")
+    monkeypatch.setattr(get_settings(), "chroma_persist_dir", rag_dir)
+    ingest(standards_dir=standards, persist_dir=rag_dir)
+
     class FakeLLM:
         def complete(self, *, system_prompt, user_prompt, **kwargs):
             if "triaged_severity" in system_prompt:
@@ -151,6 +171,8 @@ def test_real_agents_git_rag_and_saved_report(pg, tmp_path, monkeypatch):
         review.standards_version = resolve_active_collection()
         with patch("backend.services.review_service._post_pr_comment") as post:
             _execute_graph_and_persist(db, review, str(tmp_path))
+            post.assert_not_called()
+            worker.run_next()
             post.assert_called_once()
         db.refresh(review)
         runs = db.query(ReviewAgentRun).filter_by(review_id=review.id).all()
@@ -182,3 +204,78 @@ def test_checkpoint_roundtrip_preserves_scanner_evidence(pg):
     AgentCheckpoints(engine, review_id, "a").save("security", result)
     assert AgentCheckpoints(engine, review_id, "a").load("security") == result
     assert AgentCheckpoints(engine, review_id, "b").load("security") is None
+
+def test_quality_recovers_saved_batch_after_interruption(pg, monkeypatch):
+    from backend.agents.quality_agent import QualityAgent
+    from backend.rag.retriever import RetrievalResult, RetrievedPassage
+    from backend.services.agent_checkpoints import AgentCheckpoints, quality_checkpoints
+
+    engine, factory, _ = pg
+    with factory() as db:
+        review = create_review(db, repo_full_name="test/repo", pr_number=1, head_sha="a")
+        review_id = review.id
+    monkeypatch.setattr("backend.agents.quality_agent._DIFF_PROMPT_CHARS", 65)
+
+    def diff(path):
+        return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1 @@\n+value = 1\n"
+
+    class Model:
+        calls = []
+
+        def complete(self, **kwargs):
+            self.calls.append(kwargs["user_prompt"])
+            if len(self.calls) == 2:
+                raise KeyboardInterrupt
+            return '{"findings": []}'
+
+    def retrieve(query, **_kwargs):
+        result = RetrievalResult(query_text=query)
+        result.passages = [RetrievedPassage("Use snake case.", "standards.md", 0.1, "rule")]
+        return result
+
+    model = Model()
+    source = diff("one.py") + diff("App.tsx") + diff("two.py")
+    key = quality_checkpoints.set(AgentCheckpoints(engine, review_id, "fixture"))
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            QualityAgent(llm_client=model, retriever_fn=retrieve).run(source)
+        result = QualityAgent(llm_client=model, retriever_fn=retrieve).run(source)
+    finally:
+        quality_checkpoints.reset(key)
+    assert len(model.calls) == 3
+    assert "one.py" in model.calls[0]
+    assert "two.py" in model.calls[1] and model.calls[1] == model.calls[2]
+    assert all("App.tsx" not in prompt for prompt in model.calls)
+    assert result.outcome.value == "degraded"
+    assert "Excluded from Quality: App.tsx" in result.notes
+
+def test_report_delivery_reconciles_existing_comment_and_skips_stale_head(pg):
+    from types import SimpleNamespace
+    from backend.services.review_service import deliver_report
+
+    _, factory, _ = pg
+    with factory() as db:
+        db.add(Installation(id=990, account_login="owner"))
+        db.commit()
+        review = create_review(db, repo_full_name="owner/repo", pr_number=1,
+                               head_sha="old", installation_id=990)
+        review.status = "completed"
+        review.report_markdown = "Saved report."
+        review.delivery_status = "pending"
+        db.commit()
+        with patch("backend.tools.github_app.get_installation_github") as get_github:
+            pr = get_github.return_value.get_repo.return_value.get_pull.return_value
+            pr.head.sha = "new"
+            pr.get_issue_comments.return_value = []
+            deliver_report(db, review)
+            assert review.delivery_status == "failed"
+            assert review.delivery_retry_at is None
+            pr.create_issue_comment.assert_not_called()
+
+            pr.get_issue_comments.return_value = [
+                SimpleNamespace(id=123, body=f"<!-- codeguardian-review:{review.id} -->\nSaved report.")
+            ]
+            deliver_report(db, review)
+            assert review.delivery_status == "posted"
+            assert review.comment_id == "123"
+            pr.create_issue_comment.assert_not_called()

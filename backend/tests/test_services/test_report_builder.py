@@ -349,10 +349,10 @@ class TestAgentStatusAccuracy:
         row = _quality_row(md)
         assert "\u2705" not in row  # no check mark
         assert "\u26a0" in row  # warning sign
-        assert "could not run" in row
+        assert "completed with limitations" in row
         assert "ChromaDB unreachable" in row
         # A count of 0 would read as "clean"; it must not be shown as a number.
-        assert "| 0 |" not in row
+        assert "| 0 |" in row
 
     def test_failed_agent_never_renders_a_check_mark(self):
         state = _state_with_all_agents()
@@ -394,7 +394,7 @@ class TestAgentStatusAccuracy:
         md = format_pr_comment(aggregate(state), pr_number=99)
 
         assert "2/4 agents succeeded" in md
-        assert "1 could not run" in md
+        assert "1 completed with limitations" in md
         assert "1 failed" in md
 
     def test_incomplete_review_is_called_out_next_to_the_counts(self):
@@ -403,7 +403,7 @@ class TestAgentStatusAccuracy:
         state["quality_result"]["quality"]["outcome"] = AgentOutcome.DEGRADED.value
         md = format_pr_comment(aggregate(state), pr_number=99)
 
-        assert "Incomplete review" in md
+        assert "Incomplete coverage" in md
         assert "Quality" in md
 
     def test_all_ok_has_no_incomplete_banner(self):

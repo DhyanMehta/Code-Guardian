@@ -57,6 +57,7 @@ class Review(Base):
     report_markdown: Mapped[str | None] = mapped_column(Text)
     delivery_status: Mapped[str | None] = mapped_column(String(32))
     delivery_error: Mapped[str | None] = mapped_column(Text)
+    delivery_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     delivery_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     comment_id: Mapped[str | None] = mapped_column(String(64))
     requested_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
@@ -169,6 +170,7 @@ class ReviewAgentRun(Base):
     """JSON array of the agent's own notes, including transparency notes such as
     how many fabricated findings were dropped."""
     scanner_statuses: Mapped[str | None] = mapped_column(Text, nullable=True)
+    coverage: Mapped[str | None] = mapped_column(Text)
     raw_findings: Mapped[str | None] = mapped_column(Text)
     """JSON array of per-scanner outcomes (Security Agent only): which of Semgrep,
     Bandit, and Gitleaks ran and which failed. Needed so a re-rendered report can

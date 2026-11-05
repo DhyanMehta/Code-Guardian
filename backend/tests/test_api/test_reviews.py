@@ -250,9 +250,9 @@ class TestReviewReport:
         quality_row = next(l for l in md.splitlines() if l.startswith("| Quality "))
         assert "\u26a0" in quality_row          # warning sign
         assert "\u2705" not in quality_row      # never a check mark
-        assert "could not run" in quality_row
+        assert "completed with limitations" in quality_row
         assert "3/4 agents succeeded" in md
-        assert "Incomplete review" in md
+        assert "Incomplete coverage" in md
 
     def test_report_lists_every_agent_including_zero_finding_ones(self, client, seeded):
         md = client.get(f"/reviews/{seeded['healthy']}/report").json()["markdown"]

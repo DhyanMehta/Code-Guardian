@@ -31,7 +31,7 @@ from backend.agents.state import (
     TestGapAgentResult,
     AgentOutcome,
 )
-from backend.tools.llm_client import LLMClient, LLMConfigError, LLMError
+from backend.tools.llm_client import LLMBudgetError, LLMClient, LLMConfigError, LLMError
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,10 @@ class TestGapAgent:
             result.notes.append("Empty diff; nothing to analyze.")
             return result
 
-        python_files = [f for f in changed_files if f.endswith(".py")]
+        from backend.services.agent_coverage import current
+        coverage = current.get()
+        python_files = [f for f in changed_files if f.endswith(".py") and
+                        (coverage is None or f in coverage.eligible_files)]
         if not python_files:
             result.notes.append("No Python files changed; test-gap analysis skipped.")
             return result
@@ -136,7 +139,15 @@ class TestGapAgent:
         ranked = self._rank_by_risk(gaps)
         result.gaps = ranked
 
-        self._draft_tests(ranked, workspace_path, result)
+        from backend.tools.review_budget import optional_draft_budget
+        if ranked:
+            with optional_draft_budget() as allowed:
+                if allowed:
+                    self._draft_tests(ranked, workspace_path, result)
+                else:
+                    from backend.services.agent_coverage import enrichment_observed
+                    enrichment_observed("skipped", len(ranked))
+                    result.notes.append("Test drafts skipped to preserve the review budget.")
         return result
 
     def _extract_modified_functions(
@@ -169,6 +180,8 @@ class TestGapAgent:
 
             try:
                 tree = ast.parse(source, filename=file_path)
+                from backend.services.agent_coverage import observed
+                observed([file_path])
             except SyntaxError as exc:
                 self._analysis_errors.append(f"Could not parse {file_path}.")
                 logger.warning("Cannot parse %s: %s", file_path, exc)
@@ -379,12 +392,17 @@ class TestGapAgent:
         result: TestGapAgentResult,
     ) -> None:
         """Use the LLM to draft tests for the top gaps."""
+        from backend.services.agent_coverage import enrichment_observed
         llm = self._get_llm()
         if llm is None:
+            enrichment_observed("skipped", len(gaps))
             result.notes.append("LLM not configured; returning gaps without drafts.")
             return
 
-        for gap in gaps[:10]:
+        if len(gaps) > 10:
+            enrichment_observed("skipped", len(gaps) - 10)
+            result.notes.append(f"Test drafting cap skipped {len(gaps) - 10} eligible targets.")
+        for index, gap in enumerate(gaps[:10]):
             fn = gap.function
             module_path = self._file_to_module(fn.file_path)
             user_prompt = (
@@ -400,7 +418,13 @@ class TestGapAgent:
                     max_tokens=512,
                     json_mode=True,
                 )
+            except LLMBudgetError:
+                enrichment_observed("skipped", min(len(gaps), 10) - index)
+                result.notes.append("Remaining optional drafts skipped after the drafting budget was exhausted.")
+                break
             except LLMError as exc:
+                from backend.services.agent_coverage import enrichment_failed
+                enrichment_failed()
                 logger.warning("LLM draft failed for %s: %s", fn.name, exc)
                 result.notes.append(
                     f"LLM draft failed for '{fn.name}' ({type(exc).__name__})."
@@ -411,7 +435,11 @@ class TestGapAgent:
                 raw_response, gap, workspace_path
             )
             if draft is not None:
+                enrichment_observed("completed")
                 result.drafted_tests.append(draft)
+            else:
+                enrichment_observed("failed")
+                result.notes.append(f"Test draft for '{fn.name}' rejected by validation.")
 
     def _validate_drafted_test(
         self,

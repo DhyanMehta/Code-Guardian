@@ -14,6 +14,8 @@ a line through mostly-missing data.
 
 from __future__ import annotations
 
+import json
+
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -153,7 +155,9 @@ def compute_trends(
                 degraded.append(run.agent)
 
         unrecorded = [name for name in AGENT_NAMES if name not in recorded_agents]
-        coverage_recorded = not unrecorded
+        coverage_metadata = [json.loads(run.coverage) for run in review.agent_runs if run.coverage]
+        coverage_recorded = not unrecorded and len(coverage_metadata) == len(AGENT_NAMES)
+        coverage_complete = coverage_recorded and all(item["status"] in {"complete", "not_applicable"} for item in coverage_metadata)
 
         finding_count = len(review.findings)
         total_findings += finding_count
@@ -189,7 +193,7 @@ def compute_trends(
             # means "do not read this point as a clean baseline", covering both a
             # recorded gap and an unknown one; the two are told apart by
             # coverage_recorded / degraded_agents.
-            "coverage_complete": coverage_recorded and not degraded,
+            "coverage_complete": coverage_complete and not degraded,
         })
 
     repos = sorted({r.repo_full_name for r in reviews})

@@ -85,7 +85,9 @@ def test_agent_metrics_count_retries_and_reported_usage(monkeypatch, caplog):
     from backend.tools.llm_metrics import agent_metrics
     # Alembic's logging configuration in migration tests disables existing loggers.
     monkeypatch.setattr('backend.tools.llm_metrics.logger.disabled', False)
-    monkeypatch.setattr('backend.tools.llm_client.time.sleep', lambda _: None)
+    clock = [0.0]
+    monkeypatch.setattr('backend.tools.llm_metrics.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr('backend.tools.llm_client.time.sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     response = _completion('ok')
     response.usage = SimpleNamespace(total_tokens=42)
     client = _make_client(_FakeCreate([APIConnectionError(request=_REQ), response]), max_retries=1)

@@ -422,8 +422,8 @@ def _finding_payload(**overrides) -> dict:
         "file_path": "pkg/app.py",
         "symbol": "process_data",
         "line": None,
-        "rule_violated": "max function length",
-        "explanation": "too long",
+        "rule_violated": "Function readability",
+        "explanation": "The function could be more focused",
         "severity": "medium",
     }
     payload.update(overrides)
@@ -856,8 +856,8 @@ class TestCountableClaimVerification:
 
         assert not result.has_findings
 
-    def test_true_parameter_claim_is_accepted(self, real_shape_workspace):
-        """build_report really does take 4, so a 3-parameter threshold holds."""
+    def test_parameter_claim_without_supporting_citation_is_rejected(self, real_shape_workspace):
+        """A real count cannot justify a threshold absent from the cited passage."""
         agent = _real_shape_agent([
             _real_shape_payload(
                 symbol="build_report",
@@ -868,7 +868,7 @@ class TestCountableClaimVerification:
 
         result = agent.run(SAMPLE_DIFF, CHANGED, str(real_shape_workspace))
 
-        assert len(result.findings) == 1
+        assert len(result.findings) == 0
 
     def test_false_length_claim_is_rejected(self, real_shape_workspace):
         """get_user_from_db spans 3 lines; a 40-line breach is impossible."""
@@ -954,8 +954,8 @@ class TestCountableClaimVerification:
         # Recompute logic lines against the cited threshold; no tolerance bypass.
         assert len(result.findings) == 0
 
-    def test_non_function_symbol_skips_the_parameter_check(self, real_shape_workspace):
-        """A constant has no parameter count to contradict."""
+    def test_non_function_parameter_claim_is_rejected(self, real_shape_workspace):
+        """A constant cannot substantiate a measurable parameter violation."""
         agent = _real_shape_agent([
             _real_shape_payload(
                 symbol="DB_PASSWORD",
@@ -967,7 +967,7 @@ class TestCountableClaimVerification:
 
         result = agent.run(SAMPLE_DIFF, CHANGED, str(real_shape_workspace))
 
-        assert len(result.findings) == 1
+        assert len(result.findings) == 0
 
     def test_claims_without_numbers_are_untouched(self, real_shape_workspace):
         agent = _real_shape_agent([

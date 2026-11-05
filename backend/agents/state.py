@@ -232,4 +232,5 @@ class ReviewState(TypedDict, total=False):
 
     # Structured per-agent run outcome (an :class:`AgentOutcome` value), keyed by
     # agent name. The report builder reads this instead of pattern-matching notes.
+    agent_coverage: Annotated[dict[str, Any], _merge_dicts]
     agent_outcomes: Annotated[dict[str, str], _merge_dicts]

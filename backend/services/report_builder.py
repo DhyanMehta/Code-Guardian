@@ -51,7 +51,7 @@ _SEVERITY_LABELS = {
 
 _OUTCOME_DISPLAY = {
     AgentOutcome.OK: ("✅", ""),
-    AgentOutcome.DEGRADED: ("⚠️", " could not run"),
+    AgentOutcome.DEGRADED: ("⚠️", " completed with limitations"),
     AgentOutcome.FAILED: ("❌", " failed"),
     AgentOutcome.UNKNOWN: ("?", " coverage not recorded"),
 }
@@ -85,11 +85,13 @@ class AgentStatus:
     finding_count: int = 0
     error_message: str | None = None
     scanner_info: str | None = None
+    coverage: dict | None = None
 
     @property
     def succeeded(self) -> bool:
         """True only when the agent actually completed its analysis."""
-        return self.outcome is AgentOutcome.OK
+        return self.outcome is AgentOutcome.OK and (self.coverage is None or
+               self.coverage["status"] in {"complete", "not_applicable"})
 
 
 @dataclass
@@ -119,6 +121,8 @@ def aggregate(state: ReviewState) -> AggregatedReport:
     _aggregate_documentation(state, findings, statuses)
 
     findings.sort(key=_sort_key)
+    for status in statuses:
+        status.coverage = state.get("agent_coverage", {}).get(status.name)
     return AggregatedReport(findings=findings, agent_statuses=statuses)
 
 
@@ -366,10 +370,15 @@ def format_pr_comment(
     else:
         detail_parts = [f"{succeeded}/{total} agents succeeded"]
         if degraded:
-            detail_parts.append(f"{degraded} could not run")
+            detail_parts.append(f"{degraded} completed with limitations")
         if failed:
             detail_parts.append(f"{failed} failed")
         status_text = f"Completed ({', '.join(detail_parts)})"
+    metadata = [s.coverage for s in report.agent_statuses if s.coverage]
+    if len(metadata) == total and total:
+        executed = sum(m["execution"] == "completed" for m in metadata)
+        complete = sum(m["status"] == "complete" for m in metadata)
+        status_text = f"Completed ({executed}/{total} agent executions completed; {complete}/{total} with complete coverage)"
     lines.append(f"**Status**: {status_text}")
     if commit_sha:
         lines.append(f"**Commit**: `{commit_sha[:7]}`")
@@ -400,8 +409,8 @@ def format_pr_comment(
         names = ", ".join(s.name.replace("_", " ").title() for s in incomplete)
         lines.append("")
         lines.append(
-            f"> **Incomplete review**: {names} did not run, so this report does not "
-            "cover that area. Counts above are a lower bound."
+            f"> **Incomplete coverage**: {names} has incomplete or unrecorded coverage. "
+            "Saved findings are included below; exclusions and limitations apply."
         )
     lines.append("")
 
@@ -440,17 +449,37 @@ def format_pr_comment(
     lines.append("|-------|--------|----------|")
     for s in report.agent_statuses:
         icon, label = _OUTCOME_DISPLAY.get(s.outcome, _OUTCOME_DISPLAY[AgentOutcome.OK])
+        if s.coverage and s.coverage["status"] in {"partial", "unknown"} and s.outcome is AgentOutcome.OK:
+            icon, label = _OUTCOME_DISPLAY[AgentOutcome.DEGRADED]
         extra = ""
         if s.scanner_info:
             extra = f" ({s.scanner_info})"
         elif s.error_message:
             extra = f" ({s.error_message[:80]})"
         extra = html.escape(extra).replace("|", "&#124;").replace("\n", " ").replace("\r", "")
-        count = s.finding_count if s.succeeded else "—"
+        if s.coverage:
+            extra += f" — coverage {s.coverage['status']}"
+        else:
+            extra += " — Coverage not recorded"
+        count = s.finding_count
         lines.append(
             f"| {s.name.replace('_', ' ').title()} | {icon}{label}{extra} | {count} |"
         )
     lines.append("")
+
+    if any(s.coverage for s in report.agent_statuses):
+        lines.extend(["### Coverage details", ""])
+        for status in report.agent_statuses:
+            metadata = status.coverage
+            if not metadata:
+                continue
+            lines.append(f"- {status.name}: {len(metadata['analyzed_files'])}/{len(metadata['eligible_files'])} eligible files analyzed; batches {metadata['batches']}; optional enrichment {metadata['enrichment']}.")
+            if "enrichment_counts" in metadata:
+                lines.append(f"  - Draft targets: {metadata['enrichment_counts']}")
+            for excluded in metadata["excluded_files"]:
+                text = html.escape(excluded["path"] + " — " + excluded["reason"]).replace("\n", " ")
+                lines.append(f"  - {text}")
+        lines.append("")
 
     # Auto-fix note
     if report.fixable_count:

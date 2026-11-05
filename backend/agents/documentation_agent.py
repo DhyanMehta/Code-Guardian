@@ -32,7 +32,7 @@ from backend.agents.state import (
     FunctionInfo,
     AgentOutcome,
 )
-from backend.tools.llm_client import LLMClient, LLMConfigError, LLMError
+from backend.tools.llm_client import LLMBudgetError, LLMClient, LLMConfigError, LLMError
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,10 @@ class DocumentationAgent:
             result.notes.append("Empty diff; nothing to analyze.")
             return result
 
-        python_files = [f for f in changed_files if f.endswith(".py")]
+        from backend.services.agent_coverage import current
+        coverage = current.get()
+        python_files = [f for f in changed_files if f.endswith(".py") and
+                        (coverage is None or f in coverage.eligible_files)]
         if not python_files:
             result.notes.append(
                 "No Python files changed; documentation analysis skipped."
@@ -126,7 +129,15 @@ class DocumentationAgent:
             return result
 
         result.flagged_functions = targets
-        self._draft_docstrings(targets, result)
+        from backend.tools.review_budget import optional_draft_budget
+        if targets:
+            with optional_draft_budget() as allowed:
+                if allowed:
+                    self._draft_docstrings(targets, result)
+                else:
+                    from backend.services.agent_coverage import enrichment_observed
+                    enrichment_observed("skipped", len(targets))
+                    result.notes.append("Docstring drafts skipped to preserve the review budget.")
         return result
 
     def _extract_functions_needing_docs(
@@ -154,6 +165,8 @@ class DocumentationAgent:
 
             try:
                 tree = ast.parse(source, filename=file_path)
+                from backend.services.agent_coverage import observed
+                observed([file_path])
             except SyntaxError as exc:
                 self._analysis_errors.append(f"Could not parse {file_path}.")
                 logger.warning("Cannot parse %s: %s", file_path, exc)
@@ -309,14 +322,19 @@ class DocumentationAgent:
         result: DocAgentResult,
     ) -> None:
         """Use the LLM to draft docstrings for flagged functions."""
+        from backend.services.agent_coverage import enrichment_observed
         llm = self._get_llm()
         if llm is None:
+            enrichment_observed("skipped", len(targets))
             result.notes.append(
                 "LLM not configured; returning flags without drafts."
             )
             return
 
-        for target in targets[:15]:
+        if len(targets) > 15:
+            enrichment_observed("skipped", len(targets) - 15)
+            result.notes.append(f"Docstring drafting cap skipped {len(targets) - 15} eligible targets.")
+        for index, target in enumerate(targets[:15]):
             fn = target.function
             user_prompt = (
                 f"Function name: {fn.name}\n"
@@ -336,7 +354,13 @@ class DocumentationAgent:
                     max_tokens=384,
                     json_mode=True,
                 )
+            except LLMBudgetError:
+                enrichment_observed("skipped", min(len(targets), 15) - index)
+                result.notes.append("Remaining optional drafts skipped after the drafting budget was exhausted.")
+                break
             except LLMError as exc:
+                from backend.services.agent_coverage import enrichment_failed
+                enrichment_failed()
                 logger.warning("LLM draft failed for %s: %s", fn.name, exc)
                 result.notes.append(
                     f"LLM draft failed for '{fn.name}' ({type(exc).__name__})."
@@ -345,7 +369,11 @@ class DocumentationAgent:
 
             draft = self._validate_drafted_docstring(raw_response, target)
             if draft is not None:
+                enrichment_observed("completed")
                 result.drafted_docstrings.append(draft)
+            else:
+                enrichment_observed("failed")
+                result.notes.append(f"Docstring draft for '{fn.name}' rejected by validation.")
 
     def _validate_drafted_docstring(
         self,

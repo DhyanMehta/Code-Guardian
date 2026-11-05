@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
+import subprocess
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -199,28 +200,99 @@ def _aggregate(state: ReviewState) -> dict[str, Any]:
 
 def build_supervisor_graph(progress=None, *, analysis_deadline=None, checkpoints=None) -> StateGraph:
     """Construct and compile the supervisor StateGraph."""
+    from threading import Event, Lock
+
     graph = StateGraph(ReviewState)
+    core_done = Event()
+    core_lock = Lock()
+    core_pending = {"security", "quality"}
 
     def tracked(name, node):
         def execute(state):
+            from backend.tools.review_budget import required_analysis_done
+
+            token = required_analysis_done.set(
+                core_done if analysis_deadline is not None and name in {"test_gap", "documentation"} else None
+            )
+            try:
+                return run(state)
+            finally:
+                required_analysis_done.reset(token)
+                if name in {"security", "quality"}:
+                    with core_lock:
+                        core_pending.discard(name)
+                        if not core_pending:
+                            core_done.set()
+
+        def run(state):
+            from backend.services.agent_checkpoints import quality_checkpoints
             from backend.tools.llm_metrics import agent_metrics
             from backend.tools.review_budget import deadline
+            from backend.services.agent_coverage import classify, current
             if checkpoints:
                 saved = checkpoints.load(name)
                 if saved is not None:
                     if progress:
                         progress("agent", "reused", name)
                         progress("agent", saved["agent_outcomes"][name], name)
+                    metadata = saved.get("agent_coverage", {}).get(name)
+                    if metadata:
+                        metadata["batches"]["reused"] += metadata["batches"]["completed"]
+                        metadata["batches"]["completed"] = 0
                     return saved
             if progress:
                 progress("agent", "started", name)
             pr = state.get("pr")
             with agent_metrics(name, repo=pr.repo_full_name if pr else None,
-                               pr=pr.pr_number if pr else None, revision=pr.head_sha if pr else None):
+                               pr=pr.pr_number if pr else None, revision=pr.head_sha if pr else None, progress=progress):
                 token = deadline.set(analysis_deadline)
+                checkpoint_token = quality_checkpoints.set(
+                    checkpoints if name == "quality" and hasattr(checkpoints, "quality_batch") else None
+                )
+                coverage = classify(pr.changed_files if pr else [], name)
+                coverage_token = current.set(coverage)
                 try:
                     result = node(state)
+                    if name == "quality":
+                        quality = result.get("quality_result", {}).get(name, {})
+                        if (quality.get("failure_reason") or "").startswith("Python Quality batches exclude") and not coverage.batches["failed"]:
+                            result["agent_outcomes"][name] = "ok"
+                            quality["outcome"] = "ok"
+                            quality["failure_reason"] = None
+                    from backend.agents.frontend_analysis import extend_result
+                    try:
+                        extend_result(name, state, result)
+                    except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
+                        result["agent_outcomes"][name] = AgentOutcome.DEGRADED.value
+                        coverage.batches["failed"] += 1
+                        result["agent_notes"][name].append(f"Frontend analysis incomplete: {exc}")
+                        if name == "quality":
+                            result["quality_result"][name]["outcome"] = AgentOutcome.DEGRADED.value
+                            result["quality_result"][name]["failure_reason"] = f"Frontend analysis incomplete: {exc}"
+                    data_key = {"quality": ("quality_result", "findings"), "test_gap": ("test_gap_result", "gaps"),
+                                "documentation": ("doc_result", "flagged_functions")}.get(name)
+                    if data_key:
+                        coverage.findings = len(result.get(data_key[0], {}).get(name, {}).get(data_key[1], []))
+                    else:
+                        coverage.findings = len(result.get("triaged_findings", {}).get(name, []))
+                        statuses = result.get("scanner_statuses", {}).get(name, [])
+                        for scanner in statuses:
+                            supported = coverage.eligible_files
+                            if scanner.scanner == "bandit":
+                                supported = [p for p in supported if p.endswith(".py")]
+                            elif scanner.scanner == "semgrep":
+                                from pathlib import PurePosixPath
+                                supported = [p for p in supported if PurePosixPath(p).suffix.lower() in
+                                             {".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"} and not p.endswith(".d.ts")]
+                            coverage.scanners.append({"scanner": scanner.scanner, "completed": scanner.ok,
+                                                      "eligible_files": supported})
+                            if scanner.ok:
+                                coverage.analyzed(supported)
+                    coverage.finish(result["agent_outcomes"][name])
+                    result["agent_coverage"] = {name: asdict(coverage)}
                 finally:
+                    current.reset(coverage_token)
+                    quality_checkpoints.reset(checkpoint_token)
                     deadline.reset(token)
             if checkpoints and result["agent_outcomes"][name] == AgentOutcome.OK.value:
                 checkpoints.save(name, result)
@@ -234,7 +306,13 @@ def build_supervisor_graph(progress=None, *, analysis_deadline=None, checkpoints
     graph.add_node("documentation", tracked("documentation", _run_documentation_node))
     graph.add_node("aggregate", _aggregate)
 
-    graph.add_conditional_edges(START, _fan_out)
+    def dispatch(state):
+        with core_lock:
+            core_pending.update(("security", "quality"))
+            core_done.clear()
+        return _fan_out(state)
+
+    graph.add_conditional_edges(START, dispatch)
     graph.add_edge("security", "aggregate")
     graph.add_edge("quality", "aggregate")
     graph.add_edge("test_gap", "aggregate")

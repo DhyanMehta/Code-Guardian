@@ -46,7 +46,7 @@ import ast
 import logging
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from backend.agents._validation import (
@@ -65,6 +65,19 @@ from backend.tools.llm_client import LLMAuthError, LLMBudgetError, LLMClient, LL
 logger = logging.getLogger(__name__)
 
 AGENT_NAME = "quality"
+
+def canonical_rule(rule: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]", "", rule.lower())
+    if "function" in normalized and ("length" in normalized or "long" in normalized):
+        return "maximum_function_length"
+    if normalized in {"futureimportmissing", "missingfutureimport", "futureannotationsimport"} or ("future" in normalized and "annotations" in normalized):
+        return "future_annotations_import"
+    if "import" in normalized and ("sort" in normalized or "order" in normalized or "organization" in normalized):
+        return "import_order"
+    if normalized in {"maximumparameters", "toomanyparameters", "parametercountexceeded", "maximumpositionalparameters"}:
+        return "maximum_positional_parameters"
+    return re.sub(r"[^a-z0-9]+", "_", rule.lower()).strip("_")
+
 
 MODULE_SYMBOL = "<module>"
 """Reserved ``symbol`` value for a violation about a file as a whole rather than one
@@ -231,7 +244,12 @@ class QualityAgent:
         target_inst_id = (
             installation_id if installation_id is not None else self._installation_id
         )
-        chunks = bounded_diff_batches(diff, _DIFF_PROMPT_CHARS)
+        chunks = [
+            chunk
+            for section in re.split(r"(?m)(?=^diff --git )", diff)
+            if section.strip()
+            for chunk in bounded_diff_batches(section, _DIFF_PROMPT_CHARS)
+        ]
         batches: list[str] = []
         excluded: set[str] = set()
         for chunk in chunks:
@@ -246,20 +264,32 @@ class QualityAgent:
             else:
                 batches.append(chunk)
         if excluded:
-            result.mark_degraded("Quality coverage excludes non-Python and generated/vendor files.")
+            result.mark_degraded("Python Quality batches exclude non-Python and generated/vendor files; see structured coverage.")
             result.notes.append("Excluded from Quality: " + ", ".join(sorted(excluded)))
         findings = []
+        from backend.services.agent_checkpoints import quality_checkpoints
         from backend.tools.review_budget import remaining
 
+        checkpoints = quality_checkpoints.get()
+
+        from backend.services.agent_coverage import batches_failed
         for index, batch in enumerate(batches):
+            checkpoint = checkpoints.quality_batch(batch) if checkpoints else None
+            saved = checkpoint.load("quality") if checkpoint else None
+            if saved is not None:
+                from backend.services.agent_coverage import current
+                coverage = current.get()
+                if coverage:
+                    coverage.batches["reused"] += 1
+                    coverage.analyzed(parse_diff_hunks(batch))
+                findings.extend(QualityFinding(**item) for item in saved["findings"])
+                result.notes.extend(saved["notes"])
+                continue
             left = remaining()
             if left is not None and left <= 0:
+                batches_failed(len(batches) - index)
                 result.mark_degraded("Quality analysis deadline reached.")
                 result.notes.append(f"Processed {index} of {len(batches)} planned batches.")
-                break
-            if index >= 20:
-                result.mark_degraded("Quality batch budget reached; some changes were not analyzed.")
-                result.notes.append(f"Analyzed 20 of {len(batches)} batches.")
                 break
             parsed_files = list(parse_diff_hunks(batch))
             batch_files = [path for path in (changed_files or []) if path in parsed_files]
@@ -271,10 +301,12 @@ class QualityAgent:
                     installation_id=target_inst_id, collection_name=self._standards_version,
                 )
             except Exception as exc:
+                batches_failed()
                 result.mark_degraded(f"Batch retrieval failed ({type(exc).__name__}).")
                 continue
             result.retrieval_context = retrieval
             if not retrieval.has_context:
+                batches_failed()
                 result.mark_degraded(f"No coding-standards context retrieved: {retrieval.error or 'unknown'}")
                 result.notes.append("No relevant coding-standards passages retrieved; cannot perform quality review for this batch.")
                 continue
@@ -282,9 +314,19 @@ class QualityAgent:
             try:
                 self._review_with_llm(batch, retrieval, partial, batch_files, workspace_path)
             except (LLMBudgetError, LLMAuthError) as exc:
+                batches_failed(len(batches) - index)
                 result.mark_degraded(type(exc).__name__)
                 result.notes.append(f"Stopped after {index} of {len(batches)} planned batches.")
                 break
+            from backend.services.agent_coverage import current
+            coverage = current.get()
+            if coverage:
+                coverage.batches["completed" if partial.outcome is AgentOutcome.OK else "failed"] += 1
+                if partial.outcome is AgentOutcome.OK:
+                    coverage.analyzed(parse_diff_hunks(batch))
+            if checkpoint and partial.outcome is AgentOutcome.OK:
+                checkpoint.save("quality", {"findings": [asdict(item) for item in partial.findings],
+                                            "notes": partial.notes})
             findings.extend(partial.findings)
             result.notes.extend(partial.notes)
             if partial.outcome is not AgentOutcome.OK:
@@ -617,6 +659,13 @@ class QualityAgent:
 
             cited = retrieval.passages[passage_index]
             kind, explanation = self._verify_supported_rule(item, cited.text, symbol, abs_path) if verify_code else ("advisory", None)
+            measurable = (canonical_rule(str(item.get("rule_violated", ""))) in
+                          {"maximum_function_length", "maximum_positional_parameters"}
+                          or _LENGTH_CLAIM_RE.search(str(item.get("explanation", "")))
+                          or _PARAM_CLAIM_RE.search(str(item.get("explanation", ""))))
+            if verify_code and measurable and kind == "advisory":
+                _reject("have no deterministically verifiable measurement and threshold", item)
+                continue
             if kind == "contradicted":
                 _reject("do not violate the cited measurable rule", item)
                 continue
@@ -645,12 +694,36 @@ class QualityAgent:
         """Only exact supported predicates become verified findings; prose is advisory."""
         try:
             source = Path(path).read_text(encoding="utf-8")
-            node = find_function(ast.parse(source), symbol)
+            tree = ast.parse(source)
+            node = find_function(tree, symbol)
         except (OSError, SyntaxError, ValueError):
             return "advisory", None
-        rule = str(item.get("rule_violated", "")).lower()
+        rule = canonical_rule(str(item.get("rule_violated", "")))
         plain = passage.replace("*", "")
-        if node and "length" in rule:
+        if rule == "import_order":
+            explanation = str(item.get("explanation", ""))
+            mentioned = re.findall(r"['`]([a-zA-Z_]\w*(?:\.\w+)+)['`]", explanation)
+            roots = {name.split(".")[0] for name in mentioned}
+            modules = [item.module for item in tree.body if isinstance(item, ast.ImportFrom)
+                       and item.module and item.module.split(".")[0] in roots]
+            if not roots and "local" in explanation.lower():
+                modules = [item.module for item in tree.body if isinstance(item, ast.ImportFrom) and item.module
+                           and any((parent / item.module.split(".")[0]).is_dir() for parent in Path(path).parents)]
+                if len(modules) > 1 and modules == sorted(modules) and "sort" in explanation.lower():
+                    return "contradicted", "The local-module import group is already alphabetically ordered."
+            if (len(roots) == 1 and len(modules) > 1 and set(mentioned) <= set(modules)
+                    and modules == sorted(modules) and "sort" in explanation.lower()):
+                return "contradicted", "The cited local-module import group is already alphabetically ordered."
+            return "advisory", None
+        if rule == "future_annotations_import":
+            present = any(isinstance(item, ast.ImportFrom) and item.module == "__future__"
+                          and any(alias.name == "annotations" for alias in item.names) for item in tree.body)
+            if present:
+                return "contradicted", "The pinned module already imports annotations from __future__."
+            if "from __future__ import annotations" in plain:
+                return "verified", "The required annotations future import is absent from the pinned module."
+            return "advisory", None
+        if node and rule == "maximum_function_length":
             limit = re.search(r"(?:not exceed|at most|maximum of)\s+(\d+)\s+lines", plain, re.I)
             if limit:
                 excluded = set()
@@ -802,7 +875,7 @@ class QualityAgent:
         collapsed = 0
 
         for finding in findings:
-            key = (finding.file_path or "", finding.symbol, finding.rule_violated)
+            key = (finding.file_path or "", finding.symbol, canonical_rule(finding.rule_violated))
             existing = by_key.get(key)
             if existing is None:
                 by_key[key] = finding

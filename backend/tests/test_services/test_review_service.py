@@ -127,6 +127,7 @@ class TestRunReviewAndPostCommentAuth:
         mock_pr = MagicMock()
         mock_gh.get_repo.return_value = mock_repo
         mock_repo.get_pull.return_value = mock_pr
+        mock_pr.head.sha = "sha789"
 
         with patch("backend.tools.github_app.get_installation_github", return_value=mock_gh) as mock_get_gh:
             _post_pr_comment(review, "## Comment", installation_id=112233)
@@ -401,7 +402,8 @@ class TestRunReview:
         db_session.refresh(review)
         assert review.status == "completed"
         assert review.summary is not None
-        mock_comment.assert_called_once()
+        mock_comment.assert_not_called()
+        assert review.delivery_status == "pending"
 
     @patch("backend.services.review_service.checkout_pr")
     @patch("backend.services.review_service.get_settings")

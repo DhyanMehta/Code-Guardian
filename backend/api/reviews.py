@@ -113,6 +113,7 @@ def _agent_runs_payload(review: Review) -> list[dict[str, Any]]:
         )
         payload.append({
             "agent": name,
+            "coverage": json.loads(run.coverage) if run.coverage else None,
             "outcome": AgentOutcome.coerce(run.outcome).value,
             "recorded": AgentOutcome.coerce(run.outcome) is not AgentOutcome.UNKNOWN,
             "finding_count": run.finding_count,
