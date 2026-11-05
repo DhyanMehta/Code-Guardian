@@ -22,3 +22,23 @@ it('distinguishes an available busy worker from a transport failure', async () =
   render(<ReviewProgress status="running" />);
   await waitFor(() => expect(screen.getByText(/Cannot check worker availability/)).toBeInTheDocument());
 });
+
+it('shows provider wait reasons without replacing the terminal agent outcome', async () => {
+  const { AgentTimeline } = await import('../components/reviews/AgentTimeline');
+  const { review } = await import('./fixtures');
+  const { parseReview } = await import('../api/contracts');
+  const common = { attempt: 1, agent: 'quality' as const, created_at: '2026-11-04T08:00:00Z' };
+  const active = review({ attempt: 1, status: 'running', progress: [
+    { ...common, id: 1, stage: 'agent', status: 'started' },
+    { ...common, id: 2, stage: 'provider_token', status: 'started' },
+  ] });
+  const view = render(<AgentTimeline review={parseReview(active)} />);
+  expect(screen.getByText('Waiting for token allowance')).toBeInTheDocument();
+  view.rerender(<AgentTimeline review={parseReview({
+    ...active, status: 'completed', progress: [
+      ...active.progress, { ...common, id: 3, stage: 'agent', status: 'degraded' },
+    ],
+  })} />);
+  expect(screen.queryByText('Waiting for token allowance')).not.toBeInTheDocument();
+  expect(screen.getByText('Completed with limitations')).toBeInTheDocument();
+});

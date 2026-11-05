@@ -29,12 +29,90 @@ export function AutofixActions({ userId, review: r }: { userId: number; review: 
     invalidateResources(`u:${userId}:review:${r.id}`);
     invalidateResources(`u:${userId}:i:${r.installation_id}:repo:${r.repo_full_name}:`);
   };
-  return <div className="space-y-3">
-    <p className="text-sm text-neutral-400">Revision freshness: {head.loading ? 'Checking…' : stale ? 'Outdated review' : head.data && r.commit_sha ? 'Matches current PR head' : 'Not confirmed'} <button className="underline" onClick={head.refresh}>Refresh PR head</button></p>
-    {stale && r.installation_id !== null && <Link className="text-primary-400 underline" to={repoUrl(r.installation_id, r.repo_full_name)}>Open pull requests to run a new review</Link>}
-    {(r.autofix.status === null || r.autofix.status === 'failed') && <><p className="text-sm text-neutral-400">Create one branch for all eligible drafts in this review. Apply-time checks may skip some drafts. Inspect the previews above before continuing.</p><AsyncState error={head.error} refresh={head.refresh} /><Button disabled={blocked || !!reason} onClick={() => void write.run(() => request(`/reviews/${r.id}/autofix`, parseCreated, { method: 'POST' }), refresh)}>{write.busy ? 'Creating fix branch…' : 'Create fix branch'}</Button>{reason && <p className="text-sm text-neutral-400">{reason}</p>}{r.fixable_count > 0 && !head.data && <p className="text-xs text-neutral-400">Current-head freshness is not confirmed here; the server validates it before applying fixes.</p>}</>}
-    {r.autofix.status === 'creating' && <p role="status">Fix branch creation is in progress. Updates are automatic while this page is active.</p>}
-    {r.autofix.status === 'pending_approval' && <><p className="text-sm">Inspect the commit, applied count, and skipped fixes before recording your decision.</p><div className="flex gap-3"><Button disabled={blocked || stale} onClick={() => void write.run(() => request(`/reviews/${r.id}/autofix/approve`, parseDecision, { method: 'POST' }), refresh)}>Approve fix branch</Button><Button variant="secondary" disabled={blocked} onClick={() => void write.run(() => request(`/reviews/${r.id}/autofix/reject`, parseDecision, { method: 'POST' }), refresh)}>Reject fix branch</Button></div>{stale && <p>The PR head changed; approval is unavailable. The branch remains available for inspection.</p>}</>}
-    <WriteFeedback {...write} />
-  </div>;
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-neutral-800/60">
+        <h3 className="font-semibold text-sm text-neutral-100 uppercase tracking-wider font-mono">
+          Auto-Fix Operations
+        </h3>
+        <p className="text-xs font-mono text-neutral-400 flex items-center gap-2">
+          <span>Revision freshness:</span>
+          <span className={`px-1.5 py-0.5 rounded ${stale ? 'bg-severity-medium-bg text-severity-medium border border-severity-medium-border' : head.data && r.commit_sha ? 'bg-primary-950/40 text-primary-300 border border-primary-500/30' : 'text-neutral-300'}`}>
+            {head.loading ? 'Checking…' : stale ? 'Outdated review' : head.data && r.commit_sha ? 'Matches current PR head' : 'Not confirmed'}
+          </span>
+          <button
+            type="button"
+            className="text-primary-400 hover:text-primary-300 underline cursor-pointer"
+            onClick={head.refresh}
+          >
+            Refresh PR head
+          </button>
+        </p>
+      </div>
+
+      {stale && r.installation_id !== null && (
+        <div className="p-3 rounded-lg bg-severity-medium-bg border border-severity-medium-border text-xs text-severity-medium">
+          <Link className="text-primary-400 underline font-semibold" to={repoUrl(r.installation_id, r.repo_full_name)}>
+            Open pull requests to run a new review
+          </Link>
+        </div>
+      )}
+
+      {(r.autofix.status === null || r.autofix.status === 'failed') && (
+        <div className="space-y-3">
+          <p className="text-sm text-neutral-300">
+            Create one branch for all eligible drafts in this review. Apply-time checks may skip some drafts. Inspect the previews above before continuing.
+          </p>
+          <AsyncState error={head.error} refresh={head.refresh} />
+          <div className="flex items-center gap-3">
+            <Button
+              disabled={blocked || !!reason}
+              onClick={() => void write.run(() => request(`/reviews/${r.id}/autofix`, parseCreated, { method: 'POST' }), refresh)}
+            >
+              {write.busy ? 'Creating fix branch…' : 'Create fix branch'}
+            </Button>
+          </div>
+          {reason && <p className="text-sm text-neutral-400">{reason}</p>}
+          {r.fixable_count > 0 && !head.data && (
+            <p className="text-xs text-neutral-400 italic">
+              Current-head freshness is not confirmed here; the server validates it before applying fixes.
+            </p>
+          )}
+        </div>
+      )}
+
+      {r.autofix.status === 'creating' && (
+        <div className="p-3.5 rounded-lg bg-primary-950/30 border border-primary-500/30 text-sm text-primary-300 flex items-center gap-3">
+          <span className="w-4 h-4 border-2 border-primary-400 border-t-transparent rounded-full motion-safe:animate-spin shrink-0" />
+          <p role="status">Fix branch creation is in progress. Updates are automatic while this page is active.</p>
+        </div>
+      )}
+
+      {r.autofix.status === 'pending_approval' && (
+        <div className="space-y-3 p-4 rounded-xl bg-neutral-950/60 border border-neutral-800">
+          <p className="text-sm text-neutral-200">
+            Inspect the commit, applied count, and skipped fixes before recording your decision.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <Button
+              disabled={blocked || stale}
+              onClick={() => void write.run(() => request(`/reviews/${r.id}/autofix/approve`, parseDecision, { method: 'POST' }), refresh)}
+            >
+              Approve fix branch
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={blocked}
+              onClick={() => void write.run(() => request(`/reviews/${r.id}/autofix/reject`, parseDecision, { method: 'POST' }), refresh)}
+            >
+              Reject fix branch
+            </Button>
+          </div>
+          {stale && <p className="text-xs text-severity-medium">The PR head changed; approval is unavailable. The branch remains available for inspection.</p>}
+        </div>
+      )}
+
+      <WriteFeedback {...write} />
+    </div>
+  );
 }

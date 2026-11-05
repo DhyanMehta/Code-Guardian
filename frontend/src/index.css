@@ -4,20 +4,36 @@
   --font-sans: 'Plus Jakarta Sans Variable', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  /* Primary: #6366F1 (Indigo / Purple) Ramp */
+  /* Application Layer Surfaces */
+  --color-canvas: #090D16;
+  --color-surface: #0E1526;
+  --color-surface-raised: #141D34;
+  --color-card: #12192C;
+  --color-card-hover: #18223C;
+  --color-overlay: #1A2542;
+  --color-input: #0A0F1D;
+  --color-code: #070B14;
+
+  /* Border Hierarchy */
+  --color-border-subtle: #1E293B;
+  --color-border-default: #2A3850;
+  --color-border-emphasis: #3B4D6D;
+  --color-border-strong: #4F668E;
+
+  /* Primary: Indigo / Violet Ramp */
   --color-primary-50: #EEF2FF;
   --color-primary-100: #E0E7FF;
   --color-primary-200: #C7D2FE;
   --color-primary-300: #A5B4FC;
   --color-primary-400: #818CF8;
-  --color-primary-500: #6264EE;
+  --color-primary-500: #6366F1;
   --color-primary-600: #4F46E5;
   --color-primary-700: #4338CA;
   --color-primary-800: #3730A3;
   --color-primary-900: #312E81;
   --color-primary-950: #1E1B4B;
 
-  /* Secondary: #06B6D4 (Cyan) Ramp */
+  /* Secondary: Cyan Ramp */
   --color-secondary-50: #ECFEFF;
   --color-secondary-100: #CFFAFE;
   --color-secondary-200: #A5F3FC;
@@ -30,7 +46,7 @@
   --color-secondary-900: #164E63;
   --color-secondary-950: #083344;
 
-  /* Tertiary: #10B981 (Green) Ramp */
+  /* Tertiary / Success: Emerald Green Ramp */
   --color-tertiary-50: #ECFDF5;
   --color-tertiary-100: #D1FAE5;
   --color-tertiary-200: #A7F3D0;
@@ -43,15 +59,14 @@
   --color-tertiary-900: #064E3B;
   --color-tertiary-950: #022C22;
 
-  /* Neutral: #0B0F17 Near-black Canvas Ramping to White */
-  --color-canvas: #0B0F17;
-  --color-neutral-950: #0B0F17;
-  --color-neutral-900: #111827;
-  --color-neutral-850: #161F30;
+  /* Neutral: High-Contrast Slate / Obsidian Ramps */
+  --color-neutral-950: #090D16;
+  --color-neutral-900: #0F172A;
+  --color-neutral-850: #151F34;
   --color-neutral-800: #1E293B;
   --color-neutral-700: #334155;
   --color-neutral-600: #475569;
-  --color-neutral-500: #8492A6;
+  --color-neutral-500: #64748B;
   --color-neutral-400: #94A3B8;
   --color-neutral-300: #CBD5E1;
   --color-neutral-200: #E2E8F0;
@@ -59,7 +74,7 @@
   --color-neutral-50: #F8FAFC;
   --color-neutral-white: #FFFFFF;
 
-  /* Severity Colors: Accessible pairs */
+  /* Severity Colors: High-contrast accessible pairs */
   --color-severity-critical: #EF4444;
   --color-severity-critical-bg: #450A0A;
   --color-severity-critical-border: #991B1B;
@@ -89,6 +104,12 @@
   --color-severity-unknown-bg: #18181B;
   --color-severity-unknown-border: #3F3F46;
   --color-severity-unknown-text: #D4D4D8;
+
+  /* Specialist Agent Colors (4 Core Platform Agents) */
+  --color-agent-security: #EF4444;
+  --color-agent-quality: #06B6D4;
+  --color-agent-test_gap: #10B981;
+  --color-agent-documentation: #818CF8;
 }
 
 :root {
@@ -103,4 +124,39 @@ body {
   font-family: var(--font-sans);
   margin: 0;
   padding: 0;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom Scrollbar for Dev Tools & Code Blocks */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-canvas);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-neutral-700);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-neutral-600);
+}
+
+/* Focus styles for keyboard accessibility */
+:focus-visible {
+  outline: 2px solid var(--color-primary-400);
+  outline-offset: 2px;
+}
+
+/* Reduced motion optimization */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

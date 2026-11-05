@@ -38,7 +38,7 @@ export const HomePage: React.FC = () => {
       tools: ['ChromaDB RAG', 'AST Gatekeeper', 'Standards Alignment'],
     },
     {
-      name: 'Test-Gap Agent',
+      name: 'Test Gaps Agent',
       icon: FlaskConical,
       color: 'text-tertiary-400',
       border: 'border-tertiary-500/30',
@@ -58,79 +58,97 @@ export const HomePage: React.FC = () => {
   ];
 
   return (
-    <div className="py-8 space-y-12">
+    <div className="py-10 space-y-16">
       {/* Hero Section */}
-      <section className="text-center max-w-3xl mx-auto space-y-4">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-neutral-900 border border-neutral-800 text-xs font-mono text-neutral-300">
-          <span className="w-2 h-2 rounded-full bg-tertiary-500 animate-pulse" />
-          <span>Multi-Agent LangGraph Orchestration</span>
+      <section className="text-center max-w-4xl mx-auto space-y-6 pt-4">
+        <div className="inline-flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-neutral-900/90 border border-neutral-700/80 text-xs font-mono text-neutral-200 shadow-2xs">
+          <span className="w-2 h-2 rounded-full bg-tertiary-400 motion-safe:animate-pulse" />
+          <span className="font-medium">Multi-Agent LangGraph Orchestration</span>
         </div>
 
-        <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-neutral-100 font-sans">
-          Autonomous DevSecOps Code Reviews for GitHub
+        <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-neutral-100 font-sans leading-[1.1]">
+          Autonomous <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary-400 via-primary-300 to-secondary-400">DevSecOps Code Reviews</span> for GitHub
         </h1>
 
-        <p className="text-base text-neutral-400 leading-relaxed max-w-2xl mx-auto">
+        <p className="text-base sm:text-lg text-neutral-300 leading-relaxed max-w-2xl mx-auto font-normal">
           CodeGuardian AI orchestrates four specialist agents in parallel to review GitHub pull requests, delivering a single severity-ranked PR comment and optional approval-gated auto-fix branch.
         </p>
 
-        <div className="pt-4 flex items-center justify-center gap-3">
-          <Button variant="github"
+        <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-4">
+          <Button
+            variant="github"
             id="hero-github-signin-btn"
             size="lg"
             disabled={isLoading || busy}
             onClick={() => void loginWithGitHub(returnTo)}
+            className="shadow-md shadow-primary-950/40 text-sm font-semibold"
           >
-            <GithubIcon className="w-4 h-4" aria-hidden="true" />
+            <GithubIcon className="w-5 h-5 shrink-0" aria-hidden="true" />
             <span>Sign in with GitHub</span>
             <ArrowRight className="w-4 h-4 ml-1" aria-hidden="true" />
           </Button>
         </div>
+
+        {/* Feature Badges */}
+        <div className="pt-2 flex flex-wrap items-center justify-center gap-4 text-xs font-mono text-neutral-400">
+          <span className="flex items-center gap-1.5">
+            <span className="text-tertiary-400">✓</span> Zero hallucinated findings
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="text-tertiary-400">✓</span> Deterministic AST gatekeeper
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="text-tertiary-400">✓</span> Human approval required for fixes
+          </span>
+        </div>
       </section>
 
       {/* Specialist Agents Grid */}
-      <section aria-labelledby="agents-overview-heading" className="space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-end justify-between border-b border-neutral-800 pb-3">
+      <section aria-labelledby="agents-overview-heading" className="space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between border-b border-neutral-800 pb-4">
           <div>
-            <h2 id="agents-overview-heading" className="text-lg font-semibold text-neutral-100">
+            <h2 id="agents-overview-heading" className="text-xl font-bold tracking-tight text-neutral-100">
               Four Parallel Specialist Agents
             </h2>
-            <p className="text-xs text-neutral-400 mt-0.5">
+            <p className="text-xs sm:text-sm text-neutral-400 mt-1">
               Deterministic scanners and AST validation feed LLM triage — the model never originates findings.
             </p>
           </div>
-          <span className="text-xs font-mono text-neutral-400 mt-2 sm:mt-0">
+          <span className="text-xs font-mono text-primary-400 bg-primary-950/40 border border-primary-500/30 px-2.5 py-1 rounded-md mt-2 sm:mt-0 self-start sm:self-auto">
             Supervisor: LangGraph Aggregator
           </span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
           {agents.map((agent) => {
             const Icon = agent.icon;
             return (
               <div
                 key={agent.name}
-                className="bg-neutral-900 border border-neutral-800 rounded-lg p-5 flex flex-col justify-between"
+                className="bg-neutral-900/80 hover:bg-neutral-850/80 border border-neutral-800 hover:border-neutral-700/80 rounded-xl p-6 flex flex-col justify-between transition-all duration-150 shadow-xs group"
               >
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-md bg-neutral-850 border border-neutral-800 flex items-center justify-center">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-10 h-10 rounded-lg bg-neutral-850 border border-neutral-700/60 flex items-center justify-center group-hover:scale-105 transition-transform">
                       <Icon className={`w-5 h-5 ${agent.color}`} aria-hidden="true" />
                     </div>
-                    <h3 className="text-base font-semibold text-neutral-200">
-                      {agent.name}
-                    </h3>
+                    <div>
+                      <h3 className="text-base font-semibold text-neutral-100 group-hover:text-white transition-colors">
+                        {agent.name}
+                      </h3>
+                      <span className="text-[11px] font-mono text-neutral-400">Specialist worker</span>
+                    </div>
                   </div>
-                  <p className="text-xs text-neutral-400 leading-relaxed">
+                  <p className="text-xs sm:text-sm text-neutral-300 leading-relaxed">
                     {agent.description}
                   </p>
                 </div>
 
-                <div className="mt-4 pt-3 border-t border-neutral-800/80 flex flex-wrap gap-1.5">
+                <div className="mt-5 pt-4 border-t border-neutral-800/80 flex flex-wrap gap-2">
                   {agent.tools.map((tool) => (
                     <span
                       key={tool}
-                      className="px-2 py-0.5 rounded-xs bg-neutral-800/80 text-[11px] font-mono text-neutral-300"
+                      className="px-2.5 py-1 rounded-md bg-neutral-950/80 border border-neutral-800 text-xs font-mono text-neutral-300"
                     >
                       {tool}
                     </span>
@@ -143,15 +161,17 @@ export const HomePage: React.FC = () => {
       </section>
 
       {/* Architectural Guarantee Section */}
-      <section className="bg-neutral-900/60 border border-neutral-800 rounded-lg p-5 space-y-3">
-        <div className="flex items-center gap-2">
-          <GitPullRequest className="w-4 h-4 text-primary-400" aria-hidden="true" />
-          <h2 className="text-sm font-semibold text-neutral-200 uppercase tracking-wider font-mono">
+      <section className="bg-neutral-900/60 border border-neutral-800/90 rounded-xl p-6 sm:p-8 space-y-4 shadow-xs">
+        <div className="flex items-center gap-2.5 pb-2 border-b border-neutral-800/60">
+          <div className="p-1.5 rounded-md bg-primary-500/10 border border-primary-500/20">
+            <GitPullRequest className="w-4 h-4 text-primary-400" aria-hidden="true" />
+          </div>
+          <h2 className="text-sm font-semibold text-neutral-100 uppercase tracking-wider font-mono">
             Human-Gated Auto-Fix Workflow
           </h2>
         </div>
-        <p className="text-xs text-neutral-400 leading-relaxed">
-          Test-Gap and Documentation agents can generate fixable candidate patches on an isolated branch (<code className="text-primary-300 font-mono">codeguardian/fix-pr-N</code>). Security and Quality findings are advisory and never autofixed. Auto-fix branches never merge automatically and require explicit human approval via the dashboard.
+        <p className="text-xs sm:text-sm text-neutral-300 leading-relaxed">
+          Test-Gap and Documentation agents can generate fixable candidate patches on an isolated branch (<code className="text-primary-300 font-mono bg-neutral-950 px-1.5 py-0.5 rounded border border-neutral-800">codeguardian/fix-pr-N</code>). Security and Quality findings are advisory and never autofixed. Auto-fix branches never merge automatically and require explicit human approval via the dashboard.
         </p>
       </section>
     </div>

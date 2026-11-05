@@ -25,7 +25,7 @@ export const StatCard: React.FC<StatCardProps> = ({
   return (
     <div
       id={id}
-      className={`bg-neutral-900 border border-neutral-800 rounded-lg p-4 flex flex-col justify-between transition-colors duration-150 ${className}`}
+      className={`bg-neutral-900/80 hover:bg-neutral-900 border border-neutral-800 hover:border-neutral-700/80 rounded-xl p-5 flex flex-col justify-between shadow-xs transition-all duration-150 ${className}`}
     >
       <div className="flex items-start justify-between gap-3">
         <span className="text-xs font-medium uppercase tracking-wider text-neutral-400">
