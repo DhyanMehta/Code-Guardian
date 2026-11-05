@@ -1,0 +1,17 @@
+rules:
+  - id: frontend-dangerous-eval
+    pattern: eval(...)
+    languages: [javascript, typescript]
+    message: Dynamic evaluation can execute arbitrary code. Inspect the input trust boundary.
+    severity: WARNING
+    metadata:
+      confidence: HIGH
+      cwe: CWE-95
+  - id: frontend-document-write
+    pattern: document.write(...)
+    languages: [javascript, typescript]
+    message: document.write inserts HTML. Inspect input sanitization and prefer DOM text APIs.
+    severity: WARNING
+    metadata:
+      confidence: HIGH
+      cwe: CWE-79

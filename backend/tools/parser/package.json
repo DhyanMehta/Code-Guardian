@@ -1,0 +1,8 @@
+{
+  "name": "codeguardian-static-parser",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "typescript": "5.7.3"
+  }
+}

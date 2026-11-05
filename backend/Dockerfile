@@ -2,6 +2,11 @@
 # Build context is the PROJECT ROOT (see docker-compose.yml) so the `backend`
 # package is importable as `backend.main:app`.
 
+FROM node:22.22.2-bookworm-slim AS static-parser
+WORKDIR /parser
+COPY backend/tools/parser/package*.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+
 FROM python:3.11-slim
 
 # System deps: git (repo ops), curl (fetch Gitleaks), libpq for psycopg2 at runtime.
@@ -32,6 +37,8 @@ RUN python -m pip install --upgrade pip \
 
 # Copy the application code.
 COPY backend /app/backend
+COPY --from=static-parser /usr/local/bin/node /usr/local/bin/node
+COPY --from=static-parser /parser/node_modules /app/backend/tools/parser/node_modules
 COPY alembic.ini /app/alembic.ini
 
 EXPOSE 8000

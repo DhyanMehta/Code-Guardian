@@ -27,5 +27,8 @@ chroma_db/
 
 # Frontend (not needed by the backend image).
 frontend/node_modules/
+**/node_modules/
 frontend/dist/
 frontend/build/
+scratch/
+testsprite_tests/
