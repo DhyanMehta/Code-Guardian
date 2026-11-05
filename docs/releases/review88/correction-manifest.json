@@ -1,0 +1,30 @@
+{
+  "state": "PREVIEW_ONLY_AWAITING_APPROVAL",
+  "comment_id": 6637466320,
+  "review_id": 88,
+  "url": "https://github.com/DhyanMehta/OdooXLDCE/pull/1#issuecomment-6637466320",
+  "commit_sha": "c1c01ffe775bc50061790a4e4e34ec953a6ee90f",
+  "expected_original_body_sha256": "eb98cec9d2f367192a8a867939f9b4d3e3ead806f9e5e81b9021b9b4c1f9039a",
+  "target_normalized_body_sha256": "688a9f9559bdf7672cc0ff7d494e22533863df2b94a0560a79bfbe2eb4c10322",
+  "original_findings": 92,
+  "target_findings": 85,
+  "target_agent_counts": {
+    "security": 47,
+    "quality": 14,
+    "test_gap": 7,
+    "documentation": 17
+  },
+  "rejected_ids": [
+    887,
+    893,
+    894,
+    895,
+    896,
+    897,
+    904
+  ],
+  "requires_separate_approval": [
+    "Edit existing GitHub comment by ID",
+    "Correct regular database report/findings while preserving original audit bundle"
+  ]
+}

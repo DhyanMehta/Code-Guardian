@@ -1,0 +1,651 @@
+{
+  "commit_sha": "c1c01ffe775bc50061790a4e4e34ec953a6ee90f",
+  "original_count": 92,
+  "preview_count": 85,
+  "decisions": [
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 844,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 845,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 846,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 847,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 848,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 849,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 850,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 851,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 852,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 853,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 854,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 855,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 856,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 857,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 858,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 859,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 860,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 861,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 862,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 863,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 864,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "verified",
+      "id": 813,
+      "original_title": "Maximum Function Length",
+      "decision": "corrected",
+      "reason": "membership_breakdown contains 42 nonblank logic lines; the cited limit is 40."
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 839,
+      "original_title": "Docstring incomplete: revenue_by_type",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 840,
+      "original_title": "Docstring incomplete: recent_activity",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 841,
+      "original_title": "Docstring incomplete: get_dashboard_data",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 842,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 843,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "verified",
+      "id": 814,
+      "original_title": "Maximum Function Length",
+      "decision": "corrected",
+      "reason": "event_attendance contains 49 nonblank logic lines; the cited limit is 40."
+    },
+    {
+      "source_verification": "verified",
+      "id": 815,
+      "original_title": "Maximum Function Length",
+      "decision": "corrected",
+      "reason": "test_analytics_counts_correct contains 226 nonblank logic lines; the cited limit is 40."
+    },
+    {
+      "source_verification": "static_reference_gap_reproduced",
+      "id": 816,
+      "original_title": "No direct test reference: club_summary",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "static_reference_gap_reproduced",
+      "id": 817,
+      "original_title": "No direct test reference: membership_breakdown",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "static_reference_gap_reproduced",
+      "id": 818,
+      "original_title": "No direct test reference: event_attendance",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "static_reference_gap_reproduced",
+      "id": 819,
+      "original_title": "No direct test reference: revenue_by_type",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 820,
+      "original_title": "Docstring missing: ClubSummaryOut",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 821,
+      "original_title": "Docstring missing: MembershipBreakdownOut",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 822,
+      "original_title": "Docstring missing: EventAttendanceOut",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 823,
+      "original_title": "Docstring missing: RevenueByTypeOut",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 824,
+      "original_title": "Docstring missing: RecentActivityOut",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 825,
+      "original_title": "Docstring missing: test_analytics_requires_auth",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 826,
+      "original_title": "Docstring missing: test_analytics_requires_permission",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 827,
+      "original_title": "Docstring missing: test_analytics_returns_dashboard",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 828,
+      "original_title": "Docstring missing: test_analytics_empty_club",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 829,
+      "original_title": "Docstring missing: test_analytics_counts_correct",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 830,
+      "original_title": "B106",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 831,
+      "original_title": "B106",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "static_reference_gap_reproduced",
+      "id": 832,
+      "original_title": "No direct test reference: get_club_analytics_dashboard",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "static_reference_gap_reproduced",
+      "id": 833,
+      "original_title": "No direct test reference: recent_activity",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "static_reference_gap_reproduced",
+      "id": 834,
+      "original_title": "No direct test reference: get_dashboard_data",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 835,
+      "original_title": "Docstring incomplete: get_club_analytics_dashboard",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 836,
+      "original_title": "Docstring incomplete: club_summary",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 837,
+      "original_title": "Docstring incomplete: membership_breakdown",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "documentation_signal_reproduced",
+      "id": 838,
+      "original_title": "Docstring incomplete: event_attendance",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 865,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 866,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 867,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 868,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 869,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 870,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 871,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 872,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 873,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 874,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 875,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 876,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 877,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 878,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 879,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 880,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 881,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 882,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 883,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 884,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 885,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "scanner_signal_reproduced",
+      "id": 886,
+      "original_title": "B101",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "contradicted",
+      "id": 887,
+      "original_title": "Advisory: ImportSorting",
+      "decision": "rejected",
+      "reason": "The cited local-module import group is already alphabetically ordered."
+    },
+    {
+      "source_verification": "advisory_missing_docstring_fact_confirmed",
+      "id": 888,
+      "original_title": "Advisory: MissingDocstring",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "advisory_missing_docstring_fact_confirmed",
+      "id": 889,
+      "original_title": "Advisory: MissingDocstring",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "advisory_missing_docstring_fact_confirmed",
+      "id": 890,
+      "original_title": "Advisory: MissingDocstring",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "advisory_missing_docstring_fact_confirmed",
+      "id": 891,
+      "original_title": "Advisory: MissingDocstring",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "advisory_missing_docstring_fact_confirmed",
+      "id": 892,
+      "original_title": "Advisory: MissingDocstring",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "contradicted",
+      "id": 893,
+      "original_title": "Advisory: future_import_missing",
+      "decision": "rejected",
+      "reason": "The pinned module already imports annotations from __future__."
+    },
+    {
+      "source_verification": "contradicted",
+      "id": 894,
+      "original_title": "Advisory: function_too_long",
+      "decision": "rejected",
+      "reason": "club_summary contains 39 nonblank logic lines; the cited limit is 40."
+    },
+    {
+      "source_verification": "verified",
+      "id": 895,
+      "original_title": "Advisory: function_too_long",
+      "decision": "rejected",
+      "reason": "Duplicate canonical rule for the same file and symbol"
+    },
+    {
+      "source_verification": "verified",
+      "id": 896,
+      "original_title": "Advisory: function_too_long",
+      "decision": "rejected",
+      "reason": "Duplicate canonical rule for the same file and symbol"
+    },
+    {
+      "source_verification": "contradicted",
+      "id": 897,
+      "original_title": "Advisory: function_too_long",
+      "decision": "rejected",
+      "reason": "revenue_by_type contains 35 nonblank logic lines; the cited limit is 40."
+    },
+    {
+      "source_verification": "advisory",
+      "id": 898,
+      "original_title": "Advisory: import_order",
+      "decision": "corrected_advisory",
+      "reason": "Preserve the suggestion with an explicit unverified-policy label."
+    },
+    {
+      "source_verification": "advisory_missing_docstring_fact_confirmed",
+      "id": 899,
+      "original_title": "Advisory: missing_docstring",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "advisory_missing_docstring_fact_confirmed",
+      "id": 900,
+      "original_title": "Advisory: missing_docstring",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "advisory_missing_docstring_fact_confirmed",
+      "id": 901,
+      "original_title": "Advisory: missing_docstring",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "advisory_missing_docstring_fact_confirmed",
+      "id": 902,
+      "original_title": "Advisory: missing_docstring",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "advisory_missing_docstring_fact_confirmed",
+      "id": 903,
+      "original_title": "Advisory: missing_docstring",
+      "decision": "retained",
+      "reason": "Original saved result"
+    },
+    {
+      "source_verification": "verified",
+      "id": 904,
+      "original_title": "Advisory: function_too_long",
+      "decision": "rejected",
+      "reason": "Duplicate canonical rule for the same file and symbol"
+    }
+  ]
+}

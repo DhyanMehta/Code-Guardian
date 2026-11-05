@@ -41,3 +41,7 @@ gitleaks_temp/
 llm_debug_*.txt
 testsprite_tests/tmp/
 testsprite_tests/tmp/config.json
+
+# Local verification harnesses, captures, credentials and generated reports.
+/scratch/
+/testsprite_tests/

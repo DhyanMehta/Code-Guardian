@@ -1,0 +1,874 @@
+{
+  "commit": "c1c01ffe775bc50061790a4e4e34ec953a6ee90f",
+  "scanner_counts": {
+    "semgrep": {
+      "all": 7,
+      "in_diff": 0
+    },
+    "bandit": {
+      "all": 372,
+      "in_diff": 47
+    },
+    "gitleaks": {
+      "all": 0,
+      "in_diff": 0
+    }
+  },
+  "changed_files": [
+    "backend/app/api/v1/endpoints/analytics.py",
+    "backend/app/api/v1/router.py",
+    "backend/app/schemas/analytics.py",
+    "backend/app/services/analytics_service.py",
+    "backend/tests/test_analytics.py",
+    "frontend/openapi.json",
+    "frontend/scripts/api-codegen.mjs",
+    "frontend/src/App.tsx",
+    "frontend/src/features/admin/AdminAnalyticsPage.tsx",
+    "frontend/src/features/admin/AdminHomePage.tsx",
+    "frontend/src/hooks/useBackendHealth.ts",
+    "frontend/src/lib/nav.ts",
+    "frontend/src/types/openapi.d.ts"
+  ],
+  "documentation_errors": [],
+  "test_gap_errors": [],
+  "counts": {
+    "scanner_signal_reproduced": 47,
+    "verified": 6,
+    "documentation_signal_reproduced": 17,
+    "static_reference_gap_reproduced": 7,
+    "contradicted": 4,
+    "advisory_missing_docstring_fact_confirmed": 10,
+    "advisory": 1
+  },
+  "findings": [
+    {
+      "id": 844,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 65,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 845,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 68,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 846,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 69,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 847,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 70,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 848,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 71,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 849,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 72,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 850,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 75,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 851,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 76,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 852,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 77,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 853,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 78,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 854,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 81,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 855,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 82,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 856,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 83,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 857,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 112,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 858,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 127,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 859,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 130,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 860,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 131,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 861,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 132,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 862,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 133,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 863,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 135,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 864,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 136,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 813,
+      "agent": "quality",
+      "title": "Maximum Function Length",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 85,
+      "classification": "verified",
+      "reason": "membership_breakdown contains 42 nonblank logic lines; the cited limit is 40."
+    },
+    {
+      "id": 839,
+      "agent": "documentation",
+      "title": "Docstring incomplete: revenue_by_type",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 191,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 840,
+      "agent": "documentation",
+      "title": "Docstring incomplete: recent_activity",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 234,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 841,
+      "agent": "documentation",
+      "title": "Docstring incomplete: get_dashboard_data",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 265,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 842,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 43,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 843,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 54,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 814,
+      "agent": "quality",
+      "title": "Maximum Function Length",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 134,
+      "classification": "verified",
+      "reason": "event_attendance contains 49 nonblank logic lines; the cited limit is 40."
+    },
+    {
+      "id": 815,
+      "agent": "quality",
+      "title": "Maximum Function Length",
+      "file": "backend/tests/test_analytics.py",
+      "line": 147,
+      "classification": "verified",
+      "reason": "test_analytics_counts_correct contains 226 nonblank logic lines; the cited limit is 40."
+    },
+    {
+      "id": 816,
+      "agent": "test_gap",
+      "title": "No direct test reference: club_summary",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 33,
+      "classification": "static_reference_gap_reproduced",
+      "reason": "No direct imported static test reference; runtime coverage unknown"
+    },
+    {
+      "id": 817,
+      "agent": "test_gap",
+      "title": "No direct test reference: membership_breakdown",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 85,
+      "classification": "static_reference_gap_reproduced",
+      "reason": "No direct imported static test reference; runtime coverage unknown"
+    },
+    {
+      "id": 818,
+      "agent": "test_gap",
+      "title": "No direct test reference: event_attendance",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 134,
+      "classification": "static_reference_gap_reproduced",
+      "reason": "No direct imported static test reference; runtime coverage unknown"
+    },
+    {
+      "id": 819,
+      "agent": "test_gap",
+      "title": "No direct test reference: revenue_by_type",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 191,
+      "classification": "static_reference_gap_reproduced",
+      "reason": "No direct imported static test reference; runtime coverage unknown"
+    },
+    {
+      "id": 820,
+      "agent": "documentation",
+      "title": "Docstring missing: ClubSummaryOut",
+      "file": "backend/app/schemas/analytics.py",
+      "line": 10,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 821,
+      "agent": "documentation",
+      "title": "Docstring missing: MembershipBreakdownOut",
+      "file": "backend/app/schemas/analytics.py",
+      "line": 17,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 822,
+      "agent": "documentation",
+      "title": "Docstring missing: EventAttendanceOut",
+      "file": "backend/app/schemas/analytics.py",
+      "line": 23,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 823,
+      "agent": "documentation",
+      "title": "Docstring missing: RevenueByTypeOut",
+      "file": "backend/app/schemas/analytics.py",
+      "line": 32,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 824,
+      "agent": "documentation",
+      "title": "Docstring missing: RecentActivityOut",
+      "file": "backend/app/schemas/analytics.py",
+      "line": 38,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 825,
+      "agent": "documentation",
+      "title": "Docstring missing: test_analytics_requires_auth",
+      "file": "backend/tests/test_analytics.py",
+      "line": 40,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 826,
+      "agent": "documentation",
+      "title": "Docstring missing: test_analytics_requires_permission",
+      "file": "backend/tests/test_analytics.py",
+      "line": 47,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 827,
+      "agent": "documentation",
+      "title": "Docstring missing: test_analytics_returns_dashboard",
+      "file": "backend/tests/test_analytics.py",
+      "line": 58,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 828,
+      "agent": "documentation",
+      "title": "Docstring missing: test_analytics_empty_club",
+      "file": "backend/tests/test_analytics.py",
+      "line": 87,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 829,
+      "agent": "documentation",
+      "title": "Docstring missing: test_analytics_counts_correct",
+      "file": "backend/tests/test_analytics.py",
+      "line": 147,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 830,
+      "agent": "security",
+      "title": "B106",
+      "file": "backend/tests/test_analytics.py",
+      "line": 336,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 831,
+      "agent": "security",
+      "title": "B106",
+      "file": "backend/tests/test_analytics.py",
+      "line": 347,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 832,
+      "agent": "test_gap",
+      "title": "No direct test reference: get_club_analytics_dashboard",
+      "file": "backend/app/api/v1/endpoints/analytics.py",
+      "line": 20,
+      "classification": "static_reference_gap_reproduced",
+      "reason": "No direct imported static test reference; runtime coverage unknown"
+    },
+    {
+      "id": 833,
+      "agent": "test_gap",
+      "title": "No direct test reference: recent_activity",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 234,
+      "classification": "static_reference_gap_reproduced",
+      "reason": "No direct imported static test reference; runtime coverage unknown"
+    },
+    {
+      "id": 834,
+      "agent": "test_gap",
+      "title": "No direct test reference: get_dashboard_data",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 265,
+      "classification": "static_reference_gap_reproduced",
+      "reason": "No direct imported static test reference; runtime coverage unknown"
+    },
+    {
+      "id": 835,
+      "agent": "documentation",
+      "title": "Docstring incomplete: get_club_analytics_dashboard",
+      "file": "backend/app/api/v1/endpoints/analytics.py",
+      "line": 20,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 836,
+      "agent": "documentation",
+      "title": "Docstring incomplete: club_summary",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 33,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 837,
+      "agent": "documentation",
+      "title": "Docstring incomplete: membership_breakdown",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 85,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 838,
+      "agent": "documentation",
+      "title": "Docstring incomplete: event_attendance",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 134,
+      "classification": "documentation_signal_reproduced",
+      "reason": "Same AST docstring predicate on pinned source"
+    },
+    {
+      "id": 865,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 137,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 866,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 138,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 867,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 141,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 868,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 142,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 869,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 143,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 870,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 386,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 871,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 391,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 872,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 392,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 873,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 393,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 874,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 396,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 875,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 399,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 876,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 400,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 877,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 401,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 878,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 406,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 879,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 407,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 880,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 408,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 881,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 409,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 882,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 413,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 883,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 414,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 884,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 415,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 885,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 419,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 886,
+      "agent": "security",
+      "title": "B101",
+      "file": "backend/tests/test_analytics.py",
+      "line": 421,
+      "classification": "scanner_signal_reproduced",
+      "reason": "Real scanner output in the pinned PR diff"
+    },
+    {
+      "id": 887,
+      "agent": "quality",
+      "title": "Advisory: ImportSorting",
+      "file": "backend/app/api/v1/endpoints/analytics.py",
+      "line": null,
+      "classification": "contradicted",
+      "reason": "The cited local-module import group is already alphabetically ordered."
+    },
+    {
+      "id": 888,
+      "agent": "quality",
+      "title": "Advisory: MissingDocstring",
+      "file": "backend/app/schemas/analytics.py",
+      "line": 10,
+      "classification": "advisory_missing_docstring_fact_confirmed",
+      "reason": "Missing documentation corroborates the Documentation agent; it is not an additional runtime defect."
+    },
+    {
+      "id": 889,
+      "agent": "quality",
+      "title": "Advisory: MissingDocstring",
+      "file": "backend/app/schemas/analytics.py",
+      "line": 17,
+      "classification": "advisory_missing_docstring_fact_confirmed",
+      "reason": "Missing documentation corroborates the Documentation agent; it is not an additional runtime defect."
+    },
+    {
+      "id": 890,
+      "agent": "quality",
+      "title": "Advisory: MissingDocstring",
+      "file": "backend/app/schemas/analytics.py",
+      "line": 23,
+      "classification": "advisory_missing_docstring_fact_confirmed",
+      "reason": "Missing documentation corroborates the Documentation agent; it is not an additional runtime defect."
+    },
+    {
+      "id": 891,
+      "agent": "quality",
+      "title": "Advisory: MissingDocstring",
+      "file": "backend/app/schemas/analytics.py",
+      "line": 32,
+      "classification": "advisory_missing_docstring_fact_confirmed",
+      "reason": "Missing documentation corroborates the Documentation agent; it is not an additional runtime defect."
+    },
+    {
+      "id": 892,
+      "agent": "quality",
+      "title": "Advisory: MissingDocstring",
+      "file": "backend/app/schemas/analytics.py",
+      "line": 38,
+      "classification": "advisory_missing_docstring_fact_confirmed",
+      "reason": "Missing documentation corroborates the Documentation agent; it is not an additional runtime defect."
+    },
+    {
+      "id": 893,
+      "agent": "quality",
+      "title": "Advisory: future_import_missing",
+      "file": "backend/app/services/analytics_service.py",
+      "line": null,
+      "classification": "contradicted",
+      "reason": "The pinned module already imports annotations from __future__."
+    },
+    {
+      "id": 894,
+      "agent": "quality",
+      "title": "Advisory: function_too_long",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 33,
+      "classification": "contradicted",
+      "reason": "club_summary contains 39 nonblank logic lines; the cited limit is 40."
+    },
+    {
+      "id": 895,
+      "agent": "quality",
+      "title": "Advisory: function_too_long",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 85,
+      "classification": "verified",
+      "reason": "membership_breakdown contains 42 nonblank logic lines; the cited limit is 40."
+    },
+    {
+      "id": 896,
+      "agent": "quality",
+      "title": "Advisory: function_too_long",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 134,
+      "classification": "verified",
+      "reason": "event_attendance contains 49 nonblank logic lines; the cited limit is 40."
+    },
+    {
+      "id": 897,
+      "agent": "quality",
+      "title": "Advisory: function_too_long",
+      "file": "backend/app/services/analytics_service.py",
+      "line": 191,
+      "classification": "contradicted",
+      "reason": "revenue_by_type contains 35 nonblank logic lines; the cited limit is 40."
+    },
+    {
+      "id": 898,
+      "agent": "quality",
+      "title": "Advisory: import_order",
+      "file": "backend/tests/test_analytics.py",
+      "line": null,
+      "classification": "advisory",
+      "reason": "Advisory policy interpretation remains unverified"
+    },
+    {
+      "id": 899,
+      "agent": "quality",
+      "title": "Advisory: missing_docstring",
+      "file": "backend/tests/test_analytics.py",
+      "line": 40,
+      "classification": "advisory_missing_docstring_fact_confirmed",
+      "reason": "Missing documentation corroborates the Documentation agent; it is not an additional runtime defect."
+    },
+    {
+      "id": 900,
+      "agent": "quality",
+      "title": "Advisory: missing_docstring",
+      "file": "backend/tests/test_analytics.py",
+      "line": 47,
+      "classification": "advisory_missing_docstring_fact_confirmed",
+      "reason": "Missing documentation corroborates the Documentation agent; it is not an additional runtime defect."
+    },
+    {
+      "id": 901,
+      "agent": "quality",
+      "title": "Advisory: missing_docstring",
+      "file": "backend/tests/test_analytics.py",
+      "line": 58,
+      "classification": "advisory_missing_docstring_fact_confirmed",
+      "reason": "Missing documentation corroborates the Documentation agent; it is not an additional runtime defect."
+    },
+    {
+      "id": 902,
+      "agent": "quality",
+      "title": "Advisory: missing_docstring",
+      "file": "backend/tests/test_analytics.py",
+      "line": 87,
+      "classification": "advisory_missing_docstring_fact_confirmed",
+      "reason": "Missing documentation corroborates the Documentation agent; it is not an additional runtime defect."
+    },
+    {
+      "id": 903,
+      "agent": "quality",
+      "title": "Advisory: missing_docstring",
+      "file": "backend/tests/test_analytics.py",
+      "line": 147,
+      "classification": "advisory_missing_docstring_fact_confirmed",
+      "reason": "Missing documentation corroborates the Documentation agent; it is not an additional runtime defect."
+    },
+    {
+      "id": 904,
+      "agent": "quality",
+      "title": "Advisory: function_too_long",
+      "file": "backend/tests/test_analytics.py",
+      "line": 147,
+      "classification": "verified",
+      "reason": "test_analytics_counts_correct contains 226 nonblank logic lines; the cited limit is 40."
+    }
+  ],
+  "provider_calls": 0
+}

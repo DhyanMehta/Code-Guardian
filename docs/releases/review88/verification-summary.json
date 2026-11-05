@@ -1,0 +1,38 @@
+{
+  "verified_date": "2026-11-06",
+  "comment_id": 6637466320,
+  "author": "codeguardian-ai-devsecops-platform[bot]",
+  "live_comment_unchanged": true,
+  "original_body_sha256": "eb98cec9d2f367192a8a867939f9b4d3e3ead806f9e5e81b9021b9b4c1f9039a",
+  "target_normalized_body_sha256": "688a9f9559bdf7672cc0ff7d494e22533863df2b94a0560a79bfbe2eb4c10322",
+  "original_findings": 92,
+  "corrected_findings": 85,
+  "per_agent": {
+    "security": 47,
+    "quality": 14,
+    "test_gap": 7,
+    "documentation": 17
+  },
+  "decision_counts": {
+    "retained": 81,
+    "corrected": 3,
+    "rejected": 7,
+    "corrected_advisory": 1
+  },
+  "source_commit": "c1c01ffe775bc50061790a4e4e34ec953a6ee90f",
+  "quality_citations_present": 21,
+  "standards_collection": "coding_standards",
+  "standards_document_count": 4,
+  "source_audit_counts": {
+    "scanner_signal_reproduced": 47,
+    "verified": 6,
+    "documentation_signal_reproduced": 17,
+    "static_reference_gap_reproduced": 7,
+    "contradicted": 4,
+    "advisory_missing_docstring_fact_confirmed": 10,
+    "advisory": 1
+  },
+  "provider_requests_this_verification": 0,
+  "github_updates": 0,
+  "regular_database_writes": 0
+}
