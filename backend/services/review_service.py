@@ -31,7 +31,9 @@ from backend.services.report_builder import (
     AggregatedReport,
     UnifiedFinding,
     aggregate,
+    coverage_headline,
     format_pr_comment,
+    no_findings_text,
 )
 from backend.tools.workspace import checkout_pr
 
@@ -396,18 +398,15 @@ def _persist_agent_runs(
 
 def _build_summary(report: AggregatedReport) -> str:
     """Short text summary for the Review.summary column."""
+    headline = coverage_headline(report)
     total = len(report.findings)
     if total == 0:
-        return "No issues found." if report.agent_statuses and all(s.succeeded for s in report.agent_statuses) else "No findings in completed checks; review incomplete."
+        return f"{headline} {no_findings_text(report)}"
     by_sev: dict[str, int] = {}
     for f in report.findings:
         by_sev[f.severity.value] = by_sev.get(f.severity.value, 0) + 1
     parts = [f"{c} {s}" for s, c in by_sev.items()]
-    succeeded = sum(1 for s in report.agent_statuses if s.succeeded)
-    if report.agent_statuses and all(s.coverage for s in report.agent_statuses):
-        executed = sum(s.coverage["execution"] == "completed" for s in report.agent_statuses)
-        return f"{total} findings ({', '.join(parts)}). {executed}/{len(report.agent_statuses)} agent executions completed; {succeeded}/{len(report.agent_statuses)} with complete applicable coverage."
-    return f"{total} findings ({', '.join(parts)}). {succeeded}/{len(report.agent_statuses)} agents succeeded."
+    return f"{headline} {total} findings ({', '.join(parts)})."
 
 
 class StaleDeliveryError(Exception):

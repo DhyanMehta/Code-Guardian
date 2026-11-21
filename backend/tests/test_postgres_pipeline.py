@@ -108,7 +108,7 @@ def test_atomic_report_and_delivery_failure(pg, tmp_path):
             worker.run_next()
         db.refresh(review)
         assert review.delivery_status == "failed" and review.delivery_retry_at is not None
-        assert "No issues found" in review.report_markdown
+        assert "No findings reported." in review.report_markdown
         assert db.query(ReviewAgentRun).filter_by(review_id=review.id).count() == 4
         snapshot = review.report_markdown
         review.delivery_retry_at = datetime.now(timezone.utc)

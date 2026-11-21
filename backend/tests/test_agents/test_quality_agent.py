@@ -74,6 +74,8 @@ diff --git a/app.py b/app.py
      pass
 """
 
+PKG_SAMPLE_DIFF = SAMPLE_DIFF.replace("a/app.py", "a/pkg/app.py").replace("b/app.py", "b/pkg/app.py")
+
 
 class TestQualityAgentHappyPath:
     def test_grounded_finding_accepted(self) -> None:
@@ -438,6 +440,137 @@ def _agent_for(response_findings: list[dict]) -> tuple[QualityAgent, _FakeLLM]:
     return QualityAgent(llm_client=llm, retriever_fn=retriever), llm
 
 
+_IMPORT_STANDARD = "Sort imports alphabetically within each group."
+_ROUTER_IMPORT = """\
+from app.api.v1.endpoints import (
+    analytics,
+    announcements,
+    auth,
+    clubs,
+    events,
+    expenses,
+    finance,
+    health,
+    memberships,
+    merchandise,
+    orders,
+    projects,
+    refunds,
+    roles,
+)
+"""
+_ROUTER_IMPORT_CLAIM = (
+    "The imported endpoint modules are not listed in alphabetical order within "
+    "the local imports group (analytics appears before announcements)."
+)
+_LIVE_ROUTER_IMPORT_CLAIM = (
+    "Imports from app.api.v1.endpoints are not alphabetically ordered; "
+    "'analytics' appears before 'announcements' and others."
+)
+
+
+def _run_import_order_claim(tmp_path, source: str, explanation: str):
+    path = tmp_path / "router.py"
+    path.write_text(source, encoding="utf-8")
+    lines = source.splitlines()
+    diff = (
+        "diff --git a/router.py b/router.py\n"
+        "--- /dev/null\n"
+        "+++ b/router.py\n"
+        f"@@ -0,0 +1,{len(lines)} @@\n"
+        + "".join(f"+{line}\n" for line in lines)
+    )
+    retriever = _FakeRetriever(
+        _retrieval_with_passages([_passage(_IMPORT_STANDARD, "python_coding_standards.md")])
+    )
+    claim = _finding_payload(
+        file_path="router.py", symbol=MODULE_SYMBOL, rule_violated="Import sorting",
+        explanation=explanation,
+    )
+    llm = _FakeLLM(json.dumps({"findings": [claim]}))
+    result = QualityAgent(llm_client=llm, retriever_fn=retriever).run(diff, ["router.py"], str(tmp_path))
+    assert llm.calls == 1
+    return result
+
+
+@pytest.mark.parametrize("explanation", [_ROUTER_IMPORT_CLAIM, _LIVE_ROUTER_IMPORT_CLAIM])
+def test_sorted_importfrom_names_contradict_saved_router_claim(tmp_path, explanation):
+    path = tmp_path / "router.py"
+    path.write_text(_ROUTER_IMPORT, encoding="utf-8")
+    kind, reason = QualityAgent._verify_supported_rule(
+        {"rule_violated": "Import sorting", "explanation": explanation},
+        _IMPORT_STANDARD, MODULE_SYMBOL, path,
+    )
+    assert kind == "contradicted"
+    assert "app.api.v1.endpoints" in reason
+
+    result = _run_import_order_claim(tmp_path, _ROUTER_IMPORT, explanation)
+    assert not result.findings
+    assert "Dropped 1 finding(s) that do not violate the cited measurable rule." in result.notes
+
+
+@pytest.mark.parametrize(("names", "explanation"), [
+    ("announcements, analytics", _ROUTER_IMPORT_CLAIM.replace(
+        "analytics appears before announcements", "announcements appears before analytics"
+    )),
+    ("analytics, announcements, roles, refunds", _ROUTER_IMPORT_CLAIM),
+    ("analytics, announcements, roles, refunds", _LIVE_ROUTER_IMPORT_CLAIM),
+])
+def test_unsorted_importfrom_names_remain_advisory(tmp_path, names, explanation):
+    result = _run_import_order_claim(tmp_path, f"from app.api.v1.endpoints import {names}\n", explanation)
+    assert [finding.evidence_kind for finding in result.findings] == ["advisory"]
+
+
+@pytest.mark.parametrize(("source", "explanation"), [
+    ("from foo import analytics\nfrom bar import announcements\n", _ROUTER_IMPORT_CLAIM),
+    (_ROUTER_IMPORT + "from elsewhere import analytics, announcements\n", _ROUTER_IMPORT_CLAIM),
+    (_ROUTER_IMPORT, _ROUTER_IMPORT_CLAIM.replace("endpoint modules", "names from other.endpoints")),
+    (_ROUTER_IMPORT, _LIVE_ROUTER_IMPORT_CLAIM.replace("app.api.v1.endpoints", "other.endpoints")),
+    (_ROUTER_IMPORT, "Imports are not sorted alphabetically."),
+    (_ROUTER_IMPORT, _ROUTER_IMPORT_CLAIM + " The stdlib import also follows a local import."),
+    (_ROUTER_IMPORT, _ROUTER_IMPORT_CLAIM.replace("appears before", "should appear before")),
+])
+def test_importfrom_claim_requires_unique_statement_and_observed_pair(tmp_path, source, explanation):
+    result = _run_import_order_claim(tmp_path, source, explanation)
+    assert [finding.evidence_kind for finding in result.findings] == ["advisory"]
+
+
+@pytest.mark.parametrize(("source", "explanation", "expected"), [
+    ("from endpoints import analytics, announcements, Roles\n", _ROUTER_IMPORT_CLAIM, "advisory"),
+    ("from endpoints import analytics, announcements, role_names\n", _ROUTER_IMPORT_CLAIM, "advisory"),
+    ("from endpoints import analytics, announcements, roles2\n", _ROUTER_IMPORT_CLAIM, "advisory"),
+    ("from endpoints import analytics, announcements, rôles\n", _ROUTER_IMPORT_CLAIM, "advisory"),
+    ("from endpoints import analytics, announcements, roles as endpoints_roles\n",
+     _ROUTER_IMPORT_CLAIM, "advisory"),
+    ("from endpoints import *\n", _ROUTER_IMPORT_CLAIM, "advisory"),
+    ("from endpoints import analytics, announcements, announcements\n", _ROUTER_IMPORT_CLAIM, "advisory"),
+    ("import uuid\nfrom decimal import Decimal\n",
+     "Standard library imports are not sorted alphabetically (uuid before Decimal) "
+     "violating the import organization rule.", "advisory"),
+    ("import uuid\nfrom datetime import timedelta\nfrom decimal import Decimal\n",
+     "Standard library imports are not sorted alphabetically within their group "
+     "(uuid, datetime, decimal).", "advisory"),
+    ("import uuid\n" + _ROUTER_IMPORT, _ROUTER_IMPORT_CLAIM, "contradicted"),
+])
+def test_importfrom_order_falls_through_for_unspecified_sort_conventions(tmp_path, source, explanation, expected):
+    result = _run_import_order_claim(tmp_path, source, explanation)
+    if expected == "contradicted":
+        assert not result.findings
+        assert "Dropped 1 finding(s) that do not violate the cited measurable rule." in result.notes
+    else:
+        assert [finding.evidence_kind for finding in result.findings] == ["advisory"]
+
+
+def test_importfrom_order_preserves_parse_failure(tmp_path):
+    path = tmp_path / "router.py"
+    path.write_text("from app.api.v1.endpoints import (analytics, announcements\n", encoding="utf-8")
+    result = QualityAgent._verify_supported_rule(
+        {"rule_violated": "Import sorting", "explanation": _ROUTER_IMPORT_CLAIM},
+        _IMPORT_STANDARD, MODULE_SYMBOL, path,
+    )
+    assert result == ("advisory", None)
+
+
 class TestQualityAgentCodeAnchoring:
     def test_nonexistent_symbol_is_dropped(self, workspace) -> None:
         """The exact real-world fabrication: a class that does not exist."""
@@ -471,7 +604,7 @@ class TestQualityAgentCodeAnchoring:
         result = agent.run(SAMPLE_DIFF, ["pkg/app.py"], str(workspace))
 
         assert {f.symbol for f in result.findings} == {
-            "ReportBuilder", "build", "DB_PASSWORD"
+            "ReportBuilder", "ReportBuilder.build", "DB_PASSWORD"
         }
 
     def test_line_number_comes_from_the_ast_not_the_model(self, workspace) -> None:
@@ -490,15 +623,25 @@ class TestQualityAgentCodeAnchoring:
         assert not result.has_findings
         assert any("name no symbol" in n.lower() for n in result.notes)
 
-    def test_file_outside_changed_files_is_dropped(self, workspace) -> None:
-        agent, _ = _agent_for([
-            _finding_payload(file_path="pkg/other.py", symbol="process_data")
-        ])
+    @pytest.mark.parametrize("diff", [PKG_SAMPLE_DIFF, SAMPLE_DIFF], ids=["matching", "mismatched"])
+    def test_file_outside_changed_files_is_dropped(self, workspace, diff) -> None:
+        (workspace / "pkg" / "other.py").write_text(
+            "def process_data(data):\n    return data\n", encoding="utf-8"
+        )
+        retriever = _FakeRetriever(
+            _retrieval_with_passages([_passage("Functions should stay focused and understandable.")])
+        )
+        llm = _FakeLLM(json.dumps({
+            "findings": [_finding_payload(file_path="pkg/other.py", symbol="process_data")]
+        }))
+        agent = QualityAgent(llm_client=llm, retriever_fn=retriever)
 
-        result = agent.run(SAMPLE_DIFF, ["pkg/app.py"], str(workspace))
+        result = agent.run(diff, ["pkg/app.py"], str(workspace))
 
         assert not result.has_findings
         assert any("outside the pr's changed files" in n.lower() for n in result.notes)
+        if diff == SAMPLE_DIFF:
+            assert retriever.queries[0] == agent._structural_facts(["pkg/app.py"], str(workspace))
 
     def test_module_symbol_accepted_for_a_changed_file(self, workspace) -> None:
         agent, _ = _agent_for([
@@ -593,7 +736,7 @@ class TestQualityAgentRetrievalQuery:
             llm_client=_FakeLLM(json.dumps({"findings": []})), retriever_fn=retriever
         )
 
-        agent.run(SAMPLE_DIFF, ["pkg/app.py"], str(workspace))
+        agent.run(PKG_SAMPLE_DIFF, ["pkg/app.py"], str(workspace))
 
         query = retriever.queries[0]
         assert "function process_data in pkg/app.py is" in query
@@ -611,7 +754,7 @@ class TestQualityAgentRetrievalQuery:
             llm_client=_FakeLLM(json.dumps({"findings": []})), retriever_fn=retriever
         )
 
-        agent.run(SAMPLE_DIFF, ["pkg/app.py"], str(workspace))
+        agent.run(PKG_SAMPLE_DIFF, ["pkg/app.py"], str(workspace))
 
         query = retriever.queries[0]
         assert "getUserName" not in query
@@ -626,7 +769,7 @@ class TestQualityAgentRetrievalQuery:
             llm_client=_FakeLLM(json.dumps({"findings": []})), retriever_fn=retriever
         )
 
-        agent.run(SAMPLE_DIFF, ["pkg/app.py"])
+        agent.run(PKG_SAMPLE_DIFF, ["pkg/app.py"])
 
         query = retriever.queries[0]
         assert "lines long" not in query

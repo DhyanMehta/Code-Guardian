@@ -275,4 +275,4 @@ def test_overlong_function_real_pipeline(tmp_path: Path) -> None:
     assert finding.symbol == "process_large_dataset"
     assert finding.file_path == "sample.py"
     assert finding.line == 1
-    assert finding.rule_violated == "Maximum Function Length"
+    assert finding.rule_violated == "maximum_function_length"

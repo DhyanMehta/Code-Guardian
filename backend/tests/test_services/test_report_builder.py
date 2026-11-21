@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 import pytest
 
+from backend.services.agent_coverage import Coverage
 from backend.agents.state import (
     AgentOutcome,
     PRMetadata,
@@ -19,7 +22,64 @@ from backend.services.report_builder import (
     format_pr_comment,
     _sort_key,
 )
+from backend.services.review_service import _build_summary
 from backend.tools.results import Severity
+
+
+@pytest.mark.parametrize(
+    ("exceptions", "headline", "warning"),
+    [
+        ({}, "4 of 4 agents with complete coverage.", None),
+        (
+            {"quality": "partial", "test_gap": "partial", "documentation": "partial"},
+            "1 of 4 agents with complete coverage. 3 partial.",
+            "Quality, Test Gap, and Documentation have partial coverage. One Test Gap draft failed.",
+        ),
+        ({"test_gap": "failed"}, "3 of 4 agents with complete coverage. 1 failed.", "Test Gap analysis failed."),
+        ({"quality": "partial"}, "3 of 4 agents with complete coverage. 1 partial.", "Quality has partial coverage."),
+        ({"test_gap": "not_applicable"}, "3 of 3 applicable agents with complete coverage.", None),
+    ],
+    ids=["all-complete", "durable", "test-gap-failed", "quality-partial", "not-applicable"],
+)
+def test_coverage_presentation_matches_saved_summary(exceptions, headline, warning):
+    outcomes = {"partial": AgentOutcome.DEGRADED, "failed": AgentOutcome.FAILED}
+    labels = {
+        "complete": "✅ Complete coverage",
+        "partial": "⚠️ Partial coverage",
+        "failed": "❌ Analysis failed",
+        "not_applicable": "— No eligible files",
+    }
+    statuses = []
+    for name in ("security", "quality", "test_gap", "documentation"):
+        category = exceptions.get(name, "complete")
+        coverage = Coverage(
+            execution="failed" if category == "failed" else "completed",
+            status="unknown" if category == "failed" else category,
+        )
+        if name == "test_gap" and category == "partial":
+            coverage.enrichment_counts["failed"] = 1
+        if exceptions == {"quality": "partial"} and name == "quality":
+            coverage.batches.update(completed=20, failed=14)
+        statuses.append(AgentStatus(name, outcomes.get(category, AgentOutcome.OK), coverage=asdict(coverage)))
+    report = AggregatedReport(agent_statuses=statuses)
+    markdown = format_pr_comment(report, pr_number=1)
+    headline = f"Review finished. {headline}"
+
+    assert f"**Status**: {headline}" in markdown.splitlines()
+    assert _build_summary(report).startswith(f"{headline} ")
+    assert "| Agent | Analysis coverage | Findings |" in markdown
+    assert [
+        line for line in markdown.splitlines()
+        if line.startswith(("| Security |", "| Quality |", "| Test Gap |", "| Documentation |"))
+    ] == [
+        f"| {status.name.replace('_', ' ').title()} | {labels[exceptions.get(status.name, 'complete')]} | 0 |"
+        for status in statuses
+    ]
+    warnings = [line for line in markdown.splitlines() if line.startswith("> **Incomplete coverage.")]
+    assert warnings == ([f"> **Incomplete coverage.** {warning}"] if warning else [])
+    if not exceptions:
+        assert "No issues found." in markdown
+        assert _build_summary(report) == f"{headline} No issues found."
 
 
 def _state_with_all_agents() -> ReviewState:
@@ -349,7 +409,7 @@ class TestAgentStatusAccuracy:
         row = _quality_row(md)
         assert "\u2705" not in row  # no check mark
         assert "\u26a0" in row  # warning sign
-        assert "completed with limitations" in row
+        assert "Coverage not recorded" in row
         assert "ChromaDB unreachable" in row
         # A count of 0 would read as "clean"; it must not be shown as a number.
         assert "| 0 |" in row
@@ -369,6 +429,7 @@ class TestAgentStatusAccuracy:
     def test_agent_that_ran_clean_shows_check_mark_and_zero(self):
         state = _state_with_all_agents()
         state["quality_result"]["quality"]["findings"] = []
+        state["agent_coverage"] = {"quality": asdict(Coverage(execution="completed", status="complete"))}
         md = format_pr_comment(aggregate(state), pr_number=99)
 
         row = _quality_row(md)
@@ -393,9 +454,7 @@ class TestAgentStatusAccuracy:
         state["agent_outcomes"]["test_gap"] = AgentOutcome.FAILED.value
         md = format_pr_comment(aggregate(state), pr_number=99)
 
-        assert "2/4 agents succeeded" in md
-        assert "1 completed with limitations" in md
-        assert "1 failed" in md
+        assert "0 of 4 agents with complete coverage. 1 failed. 3 not recorded." in md
 
     def test_incomplete_review_is_called_out_next_to_the_counts(self):
         state = _state_with_all_agents()
@@ -408,8 +467,12 @@ class TestAgentStatusAccuracy:
 
     def test_all_ok_has_no_incomplete_banner(self):
         state = _state_with_all_agents()
+        state["agent_coverage"] = {
+            name: asdict(Coverage(execution="completed", status="complete"))
+            for name in state["agent_outcomes"]
+        }
         md = format_pr_comment(aggregate(state), pr_number=99)
-        assert "Incomplete review" not in md
+        assert "Incomplete coverage" not in md
 
     def test_security_degraded_when_every_scanner_failed(self):
         state = _state_with_all_agents()

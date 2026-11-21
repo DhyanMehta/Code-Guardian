@@ -243,7 +243,9 @@ class TestPersistFindings:
 class TestBuildSummary:
     def test_no_findings(self):
         report = AggregatedReport(findings=[], agent_statuses=[])
-        assert _build_summary(report) == "No findings in completed checks; review incomplete."
+        assert _build_summary(report) == (
+            "Review finished. Coverage not recorded. No findings in completed checks; review incomplete."
+        )
 
     def test_with_findings(self):
         report = AggregatedReport(
@@ -261,7 +263,7 @@ class TestBuildSummary:
         )
         summary = _build_summary(report)
         assert "3 findings" in summary
-        assert "3/4 agents succeeded" in summary
+        assert "1 failed. 3 not recorded." in summary
 
     def test_degraded_agent_does_not_count_as_succeeded(self):
         """A degraded agent produced no signal; it must not inflate the success count."""
@@ -274,12 +276,17 @@ class TestBuildSummary:
                 AgentStatus(name="documentation", outcome=AgentOutcome.OK),
             ],
         )
-        assert _build_summary(report) == "No findings in completed checks; review incomplete."
+        assert _build_summary(report) == (
+            "Review finished. 0 of 4 agents with complete coverage. 4 not recorded. "
+            "No findings in completed checks; review incomplete."
+        )
 
         report.findings.append(
             UnifiedFinding(agent="security", severity=Severity.HIGH, title="a", detail="")
         )
-        assert "3/4 agents succeeded" in _build_summary(report)
+        assert _build_summary(report).startswith(
+            "Review finished. 0 of 4 agents with complete coverage. 4 not recorded."
+        )
 
 
 class TestSweepStaleReviews:

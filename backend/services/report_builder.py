@@ -49,11 +49,11 @@ _SEVERITY_LABELS = {
     Severity.UNKNOWN: "❓ Unknown",
 }
 
-_OUTCOME_DISPLAY = {
-    AgentOutcome.OK: ("✅", ""),
-    AgentOutcome.DEGRADED: ("⚠️", " completed with limitations"),
-    AgentOutcome.FAILED: ("❌", " failed"),
-    AgentOutcome.UNKNOWN: ("?", " coverage not recorded"),
+_COVERAGE_DISPLAY = {
+    "complete": "✅ Complete coverage",
+    "partial": "⚠️ Partial coverage",
+    "failed": "❌ Analysis failed",
+    "not recorded": "⚠️ Coverage not recorded",
 }
 
 
@@ -104,6 +104,47 @@ class AggregatedReport:
     @property
     def fixable_count(self) -> int:
         return sum(1 for f in self.findings if f.fixable)
+
+
+def _coverage_category(status: AgentStatus) -> str | None:
+    coverage = status.coverage or {}
+    recorded = coverage.get("status")
+    if status.outcome is AgentOutcome.FAILED or coverage.get("execution") == "failed":
+        return "failed"
+    if recorded == "not_applicable":
+        return None
+    if recorded == "partial":
+        return "partial"
+    if recorded == "complete" and status.outcome is AgentOutcome.OK:
+        return "complete"
+    return "not recorded"
+
+
+def coverage_headline(report: AggregatedReport) -> str:
+    if not report.agent_statuses:
+        return "Review finished. Coverage not recorded."
+    categories = [_coverage_category(status) for status in report.agent_statuses]
+    applicable = len(categories) - categories.count(None)
+    if not applicable:
+        return "Review finished. No agents had applicable files."
+    scope = "applicable " if applicable < len(categories) else ""
+    noun = "agent" if applicable == 1 else "agents"
+    sentences = [
+        f"Review finished. {categories.count('complete')} of {applicable} {scope}{noun} with complete coverage."
+    ]
+    for category in ("partial", "failed", "not recorded"):
+        if count := categories.count(category):
+            sentences.append(f"{count} {category}.")
+    return " ".join(sentences)
+
+
+def no_findings_text(report: AggregatedReport) -> str:
+    if not report.agent_statuses or not all(status.succeeded for status in report.agent_statuses):
+        return "No findings in completed checks; review incomplete."
+    categories = [_coverage_category(status) for status in report.agent_statuses]
+    if "complete" in categories and all(category in {"complete", None} for category in categories):
+        return "No issues found."
+    return "No findings reported."
 
 
 def aggregate(state: ReviewState) -> AggregatedReport:
@@ -357,29 +398,7 @@ def format_pr_comment(
     lines.append(f"## CodeGuardian Review — PR #{pr_number}")
     lines.append("")
 
-    # Status line
-    total = len(report.agent_statuses)
-    succeeded = sum(1 for s in report.agent_statuses if s.succeeded)
-    degraded = sum(
-        1 for s in report.agent_statuses if s.outcome is AgentOutcome.DEGRADED
-    )
-    failed = sum(1 for s in report.agent_statuses if s.outcome is AgentOutcome.FAILED)
-
-    if total and succeeded == total:
-        status_text = f"Completed ({total}/{total} agents succeeded)"
-    else:
-        detail_parts = [f"{succeeded}/{total} agents succeeded"]
-        if degraded:
-            detail_parts.append(f"{degraded} completed with limitations")
-        if failed:
-            detail_parts.append(f"{failed} failed")
-        status_text = f"Completed ({', '.join(detail_parts)})"
-    metadata = [s.coverage for s in report.agent_statuses if s.coverage]
-    if len(metadata) == total and total:
-        executed = sum(m["execution"] == "completed" for m in metadata)
-        complete = sum(m["status"] == "complete" for m in metadata)
-        status_text = f"Completed ({executed}/{total} agent executions completed; {complete}/{total} with complete coverage)"
-    lines.append(f"**Status**: {status_text}")
+    lines.append(f"**Status**: {coverage_headline(report)}")
     if commit_sha:
         lines.append(f"**Commit**: `{commit_sha[:7]}`")
     lines.append("")
@@ -387,7 +406,7 @@ def format_pr_comment(
     # Summary counts
     lines.append("### Summary")
     if not report.findings:
-        lines.append("No issues found." if total and succeeded == total else "No findings in completed checks; review incomplete.")
+        lines.append(no_findings_text(report))
     else:
         by_sev: dict[Severity, list[UnifiedFinding]] = {}
         for f in report.findings:
@@ -402,16 +421,34 @@ def format_pr_comment(
         if report.fixable_count:
             lines.append(f"- Auto-fix available for {report.fixable_count} finding(s)")
 
-    # An agent that could not run makes the whole report incomplete; say so next to
-    # the counts rather than only in the status table further down.
-    incomplete = [s for s in report.agent_statuses if not s.succeeded]
-    if incomplete:
-        names = ", ".join(s.name.replace("_", " ").title() for s in incomplete)
-        lines.append("")
-        lines.append(
-            f"> **Incomplete coverage**: {names} has incomplete or unrecorded coverage. "
-            "Saved findings are included below; exclusions and limitations apply."
-        )
+    partial, failed, unrecorded = [], [], []
+    for status in report.agent_statuses:
+        name = status.name.replace("_", " ").title()
+        category = _coverage_category(status)
+        if category == "partial":
+            partial.append(name)
+        elif category == "failed":
+            failed.append(f"{name} analysis failed.")
+        elif category == "not recorded":
+            unrecorded.append(f"{name} coverage was not recorded.")
+    if partial or failed or unrecorded:
+        warning = []
+        if len(partial) == 1:
+            warning.append(f"{partial[0]} has partial coverage.")
+        elif len(partial) == 2:
+            warning.append(f"{' and '.join(partial)} have partial coverage.")
+        elif partial:
+            warning.append(f"{', '.join(partial[:-1])}, and {partial[-1]} have partial coverage.")
+        warning.extend(failed)
+        warning.extend(unrecorded)
+        for status in report.agent_statuses:
+            if status.name == "test_gap":
+                drafts_failed = (status.coverage or {}).get("enrichment_counts", {}).get("failed", 0)
+                if drafts_failed == 1:
+                    warning.append("One Test Gap draft failed.")
+                elif drafts_failed > 1:
+                    warning.append(f"{drafts_failed} Test Gap drafts failed.")
+        lines.extend(["", f"> **Incomplete coverage.** {' '.join(warning)}"])
     lines.append("")
 
     # Findings table by severity
@@ -445,25 +482,22 @@ def format_pr_comment(
     lines.append("")
     lines.append("### Agent Status")
     lines.append("")
-    lines.append("| Agent | Status | Findings |")
-    lines.append("|-------|--------|----------|")
+    lines.append("| Agent | Analysis coverage | Findings |")
+    lines.append("|-------|-------------------|----------|")
     for s in report.agent_statuses:
-        icon, label = _OUTCOME_DISPLAY.get(s.outcome, _OUTCOME_DISPLAY[AgentOutcome.OK])
-        if s.coverage and s.coverage["status"] in {"partial", "unknown"} and s.outcome is AgentOutcome.OK:
-            icon, label = _OUTCOME_DISPLAY[AgentOutcome.DEGRADED]
+        category = _coverage_category(s)
+        label = "— No eligible files" if category is None else _COVERAGE_DISPLAY[category]
         extra = ""
         if s.scanner_info:
             extra = f" ({s.scanner_info})"
         elif s.error_message:
             extra = f" ({s.error_message[:80]})"
         extra = html.escape(extra).replace("|", "&#124;").replace("\n", " ").replace("\r", "")
-        if s.coverage:
-            extra += f" — coverage {s.coverage['status']}"
-        else:
+        if category == "failed" and not s.coverage:
             extra += " — Coverage not recorded"
         count = s.finding_count
         lines.append(
-            f"| {s.name.replace('_', ' ').title()} | {icon}{label}{extra} | {count} |"
+            f"| {s.name.replace('_', ' ').title()} | {label}{extra} | {count} |"
         )
     lines.append("")
 

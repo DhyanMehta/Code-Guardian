@@ -299,7 +299,8 @@ class QualityAgent:
                 result.notes.append(f"Processed {index} of {len(batches)} planned batches.")
                 break
             parsed_files = list(parse_diff_hunks(batch))
-            batch_files = [path for path in parsed_files if changed_files is None or path in changed_files]
+            batch_files = [path for path in (changed_files or []) if path in parsed_files]
+            batch_files = batch_files or changed_files or parsed_files
             discovery_saved = checkpoint.load('quality_discovery') if checkpoint else None
             if discovery_saved is not None:
                 stored = discovery_saved['retrieval']
@@ -795,6 +796,50 @@ class QualityAgent:
             if (len(roots) == 1 and len(modules) > 1 and set(mentioned) <= set(modules)
                     and modules == sorted(modules) and "sort" in explanation.lower()):
                 return "contradicted", "The cited local-module import group is already alphabetically ordered."
+            if symbol == MODULE_SYMBOL and "Sort imports alphabetically within each group." in passage:
+                # Match one observed pair in a claim about imported names.
+                claim = re.fullmatch(
+                    r"The imported (?:endpoint modules|names)"
+                    r"(?: from (?P<quote>[`']?)(?P<module>\.*\w+(?:\.\w+)*|\.+)(?P=quote))?"
+                    r" are not listed in alphabetical order(?: within the local imports group)?"
+                    r" \((?P<first>[a-z]+) appears before (?P<second>[a-z]+)\)\.?",
+                    explanation.strip(),
+                )
+                if claim is None:
+                    claim = re.fullmatch(
+                        r"Imports from (?P<module>\w+(?:\.\w+)*) are not alphabetically ordered; "
+                        r"'(?P<first>[a-z]+)' appears before '(?P<second>[a-z]+)' and others\.",
+                        explanation.strip(),
+                    )
+                if claim:
+                    first, second = claim.group("first", "second")
+                    candidates = [
+                        stmt for stmt in tree.body
+                        if isinstance(stmt, ast.ImportFrom)
+                        and {first, second} <= {alias.name for alias in stmt.names}
+                        and (
+                            claim["module"] is None
+                            or claim["module"] == "." * stmt.level + (stmt.module or "")
+                        )
+                    ]
+                    if len(candidates) == 1 and first != second:
+                        stmt = candidates[0]
+                        names = [alias.name for alias in stmt.names]
+                        if (
+                            len(names) == len(set(names))
+                            and all(
+                                alias.asname is None and re.fullmatch(r"[a-z]+", alias.name)
+                                for alias in stmt.names
+                            )
+                            and names.index(first) < names.index(second)
+                            and names == sorted(names)
+                        ):
+                            module = "." * stmt.level + (stmt.module or "")
+                            return (
+                                "contradicted",
+                                f"The imported names from {module} are already alphabetically ordered "
+                                f"({', '.join(names)}).",
+                            )
             return "advisory", None
         if rule == "future_annotations_import":
             present = any(isinstance(item, ast.ImportFrom) and item.module == "__future__"

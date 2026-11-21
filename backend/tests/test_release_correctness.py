@@ -64,9 +64,9 @@ def test_partial_coverage_warns_even_when_execution_is_ok():
     coverage = Coverage(execution="completed", status="partial", findings=21)
     report = AggregatedReport(agent_statuses=[AgentStatus("quality", AgentOutcome.OK, 21, coverage=asdict(coverage))])
     text = format_pr_comment(report, 1)
-    assert "1/1 agent executions completed" in text
+    assert "Review finished. 0 of 1 agent with complete coverage. 1 partial." in text
     assert "Incomplete coverage" in text
-    assert "completed with limitations" in text
+    assert "Partial coverage" in text
     assert "| 21 |" in text
 
 
@@ -140,5 +140,4 @@ def test_summary_separates_execution_and_coverage():
     status = AgentStatus("quality", AgentOutcome.OK, 1, coverage={"execution": "completed", "status": "partial"})
     report = AggregatedReport([UnifiedFinding("quality", Severity.HIGH, "Rule", "Evidence")], [status])
     summary = _build_summary(report)
-    assert "1/1 agent executions completed" in summary
-    assert "0/1 with complete applicable coverage" in summary
+    assert summary.startswith("Review finished. 0 of 1 agent with complete coverage. 1 partial.")
