@@ -1,9 +1,9 @@
 """Quality Agent.
 
-Checks PR diffs against the team's coding standards retrieved via RAG (ChromaDB).
-The LLM is grounded ONLY on retrieved standards passages — if retrieval returns
-nothing relevant, the agent explicitly says so rather than letting the LLM invent
-generic advice not backed by the team's standards.
+Checks PR diffs against versioned coding standards retrieved via RAG (ChromaDB).
+Supported Python predicates are discovered from AST/diff evidence and checkpointed
+before optional model enrichment. Model omissions cannot suppress those findings.
+No applicable retrieved rule means no invented deterministic requirement.
 
 Anti-hallucination: a quality finding must survive three independent checks before
 it is accepted.
@@ -30,8 +30,8 @@ Findings that fail any check are dropped and logged, never surfaced — the same
 treatment the Security Agent gives an LLM finding whose fingerprint maps to no real
 scanner output (``RULES.md`` #5).
 
-**Known limitation (deliberate scope boundary).** Only symbol existence, parameter
-count, and length are verified. Free-form assertions — "this reads as a question",
+**Known limitation (deliberate scope boundary).** Supported length, positional
+parameter and future-annotations rules are deterministic. Free-form assertions — "this reads as a question",
 "the complexity is high", stylistic or behavioural judgements — are not checked
 against anything, because doing so would mean reimplementing each rule's semantics
 deterministically, which is a redesign of this agent rather than a guard on it. Such
@@ -58,8 +58,9 @@ from backend.agents._validation import (
     find_function,
 )
 from backend.agents._diff_utils import parse_diff_hunks, function_overlaps_diff, bounded_diff_batches
+from backend.agents.quality_rules import evaluate, functions, supported_rules
 from backend.agents.state import AgentOutcome
-from backend.rag.retriever import DEFAULT_TOP_K, RetrievalResult, retrieve
+from backend.rag.retriever import DEFAULT_TOP_K, RetrievedPassage, RetrievalResult, retrieve
 from backend.tools.llm_client import LLMAuthError, LLMBudgetError, LLMClient, LLMConfigError, LLMError
 
 logger = logging.getLogger(__name__)
@@ -266,24 +267,30 @@ class QualityAgent:
         if excluded:
             result.mark_degraded("Python Quality batches exclude non-Python and generated/vendor files; see structured coverage.")
             result.notes.append("Excluded from Quality: " + ", ".join(sorted(excluded)))
-        findings = []
+        batch_results: list[QualityAgentResult] = []
+        enrichment_tasks = []
         from backend.services.agent_checkpoints import quality_checkpoints
         from backend.tools.review_budget import remaining
 
         checkpoints = quality_checkpoints.get()
 
         from backend.services.agent_coverage import batches_failed
+        review_id = getattr(checkpoints, "review_id", None)
         for index, batch in enumerate(batches):
+            logger.info("review=%s phase=quality_batch input batch=%d/%d diff_chars=%d",
+                        review_id, index + 1, len(batches), len(batch))
             checkpoint = checkpoints.quality_batch(batch) if checkpoints else None
             saved = checkpoint.load("quality") if checkpoint else None
             if saved is not None:
+                logger.info("review=%s phase=quality_batch output batch=%d reused=True findings=%d",
+                            review_id, index + 1, len(saved["findings"]))
                 from backend.services.agent_coverage import current
                 coverage = current.get()
                 if coverage:
                     coverage.batches["reused"] += 1
                     coverage.analyzed(parse_diff_hunks(batch))
-                findings.extend(QualityFinding(**item) for item in saved["findings"])
-                result.notes.extend(saved["notes"])
+                batch_results.append(QualityAgentResult(
+                    findings=[QualityFinding(**item) for item in saved['findings']], notes=saved['notes']))
                 continue
             left = remaining()
             if left is not None and left <= 0:
@@ -292,32 +299,69 @@ class QualityAgent:
                 result.notes.append(f"Processed {index} of {len(batches)} planned batches.")
                 break
             parsed_files = list(parse_diff_hunks(batch))
-            batch_files = [path for path in (changed_files or []) if path in parsed_files]
-            batch_files = batch_files or changed_files or parsed_files
-            try:
-                retrieval = self._retriever_fn(
-                    self._build_retrieval_query(batch, batch_files, workspace_path),
-                    top_k=DEFAULT_TOP_K, persist_dir=self._persist_dir,
-                    installation_id=target_inst_id, collection_name=self._standards_version,
-                )
-            except Exception as exc:
-                batches_failed()
-                result.mark_degraded(f"Batch retrieval failed ({type(exc).__name__}).")
-                continue
+            batch_files = [path for path in parsed_files if changed_files is None or path in changed_files]
+            discovery_saved = checkpoint.load('quality_discovery') if checkpoint else None
+            if discovery_saved is not None:
+                stored = discovery_saved['retrieval']
+                retrieval = RetrievalResult(query_text=stored['query_text'], error=stored['error'],
+                    passages=[RetrievedPassage(**p) for p in stored['passages']])
+            else:
+                try:
+                    retrieval = self._retriever_fn(
+                        self._build_retrieval_query(batch, batch_files, workspace_path),
+                        top_k=DEFAULT_TOP_K, persist_dir=self._persist_dir,
+                        installation_id=target_inst_id, collection_name=self._standards_version,
+                    )
+                except Exception as exc:
+                    logger.warning("review=%s phase=retrieval batch=%d error=%s",
+                                   review_id, index + 1, type(exc).__name__)
+                    batches_failed()
+                    result.mark_degraded(f"Batch retrieval failed ({type(exc).__name__}).")
+                    result.notes.append(f'Batch {index + 1} standards retrieval failed ({type(exc).__name__}).')
+                    continue
             result.retrieval_context = retrieval
+            logger.info("review=%s phase=retrieval output batch=%d files=%r passages=%d reused=%s",
+                        review_id, index + 1, batch_files, len(retrieval.passages), discovery_saved is not None)
             if not retrieval.has_context:
                 batches_failed()
                 result.mark_degraded(f"No coding-standards context retrieved: {retrieval.error or 'unknown'}")
                 result.notes.append("No relevant coding-standards passages retrieved; cannot perform quality review for this batch.")
                 continue
-            partial = QualityAgentResult()
+            if discovery_saved is not None:
+                partial = QualityAgentResult(findings=[QualityFinding(**f) for f in discovery_saved['findings']],
+                                             notes=discovery_saved['notes'])
+            else:
+                partial = self._discover_verified(retrieval, batch_files, workspace_path, parse_diff_hunks(batch))
+                if checkpoint and partial.outcome is AgentOutcome.OK:
+                    checkpoint.save('quality_discovery', {'findings': [asdict(f) for f in partial.findings],
+                        'notes': partial.notes, 'retrieval': asdict(retrieval)})
+            batch_results.append(partial)
+            logger.info("review=%s phase=discovery output batch=%d outcome=%s findings=%d",
+                        review_id, index + 1, partial.outcome.value, len(partial.findings))
+            enrichment_tasks.append((index, batch, batch_files, retrieval, checkpoint, partial))
+
+        # All supported predicates run and are checkpointed before optional model work.
+        # A slow/failed first call must not hide later functions or files.
+        enrichment_stopped = None
+        for index, batch, batch_files, retrieval, checkpoint, partial in enrichment_tasks:
+            enrichment = QualityAgentResult()
             try:
-                self._review_with_llm(batch, retrieval, partial, batch_files, workspace_path)
+                left = remaining()
+                if enrichment_stopped or (left is not None and left <= 0):
+                    enrichment.mark_degraded(enrichment_stopped or 'Quality enrichment deadline reached.')
+                    enrichment.notes.append('Optional model enrichment skipped; deterministic findings retained.')
+                else:
+                    self._review_with_llm(batch, retrieval, enrichment, batch_files, workspace_path)
             except (LLMBudgetError, LLMAuthError) as exc:
-                batches_failed(len(batches) - index)
-                result.mark_degraded(type(exc).__name__)
-                result.notes.append(f"Stopped after {index} of {len(batches)} planned batches.")
-                break
+                enrichment_stopped = f'Quality enrichment unavailable ({type(exc).__name__}).'
+                enrichment.mark_degraded(enrichment_stopped)
+                enrichment.notes.append('Optional model enrichment unavailable; deterministic findings retained.')
+            partial.findings = self._deduplicate(partial.findings + enrichment.findings, partial)
+            logger.info("review=%s phase=enrichment output batch=%d outcome=%s accepted=%d merged_findings=%d",
+                        review_id, index + 1, enrichment.outcome.value, len(enrichment.findings), len(partial.findings))
+            partial.notes.extend(enrichment.notes)
+            if enrichment.outcome is not AgentOutcome.OK:
+                partial.mark_degraded(enrichment.failure_reason or 'Optional model enrichment incomplete.')
             from backend.services.agent_coverage import current
             coverage = current.get()
             if coverage:
@@ -327,11 +371,48 @@ class QualityAgent:
             if checkpoint and partial.outcome is AgentOutcome.OK:
                 checkpoint.save("quality", {"findings": [asdict(item) for item in partial.findings],
                                             "notes": partial.notes})
-            findings.extend(partial.findings)
+        for partial in batch_results:
             result.notes.extend(partial.notes)
             if partial.outcome is not AgentOutcome.OK:
                 result.mark_degraded(partial.failure_reason or "Batch analysis incomplete.")
-        result.findings = self._deduplicate(findings, result)
+        result.findings = self._deduplicate([f for partial in batch_results for f in partial.findings], result)
+        return result
+
+    @staticmethod
+    def _discover_verified(retrieval, paths, workspace, changed_ranges):
+        result = QualityAgentResult()
+        if not workspace:
+            return result
+        rules, notes = supported_rules(retrieval.passages)
+        result.notes.extend(notes)
+        if notes:
+            result.mark_degraded('Applicable coding standards have conflicting thresholds.')
+        for rel_path in paths:
+            if not rel_path.endswith('.py') or {'vendor', 'generated', 'node_modules'}.intersection(Path(rel_path).parts):
+                continue
+            ranges = changed_ranges.get(rel_path, [])
+            if not ranges:
+                continue
+            try:
+                source = safe_workspace_path(workspace, rel_path).read_text(encoding='utf-8')
+                tree = ast.parse(source)
+            except (OSError, ValueError, SyntaxError) as exc:
+                result.mark_degraded(f'Python AST discovery failed for {rel_path} ({type(exc).__name__}).')
+                result.notes.append(result.failure_reason)
+                continue
+            for rule in rules:
+                if rule.name == 'future_annotations_import':
+                    targets = [(MODULE_SYMBOL, None, False)]
+                else:
+                    targets = [(name, node, method) for name, node, method in functions(tree)
+                               if function_overlaps_diff(min([node.lineno] + [d.lineno for d in node.decorator_list]), node.end_lineno, ranges)]
+                for symbol, node, method in targets:
+                    violated, explanation = evaluate(rule, source, tree, symbol, node, method=method)
+                    if violated:
+                        result.findings.append(QualityFinding(file_path=rel_path, line=node.lineno if node else None,
+                            rule_violated=rule.name, explanation=explanation, severity='high' if rule.name == 'maximum_function_length' else 'medium',
+                            cited_passage=rule.passage.text, source_file=rule.passage.source_file,
+                            symbol=symbol, evidence_kind='verified'))
         return result
 
     # ------------------------------------------------------------------ #
@@ -428,7 +509,7 @@ class QualityAgent:
         try:
             self._llm = LLMClient()
         except LLMConfigError as exc:
-            logger.warning("LLM not configured; skipping quality review: %s", exc)
+            logger.warning("LLM not configured; skipping optional quality enrichment: %s", exc)
             return None
         return self._llm
 
@@ -443,7 +524,7 @@ class QualityAgent:
         llm = self._get_llm()
         if llm is None:
             result.mark_degraded("LLM client is not configured.")
-            result.notes.append("LLM not configured; quality review skipped.")
+            result.notes.append("LLM not configured; optional enrichment skipped, deterministic findings retained.")
             return
 
         passages_text = self._format_passages_for_prompt(retrieval)
@@ -476,7 +557,7 @@ class QualityAgent:
             logger.warning("LLM quality review failed: %s", exc)
             result.mark_degraded(f"LLM review failed: {type(exc).__name__}")
             result.notes.append(
-                f"LLM review failed ({type(exc).__name__}); no quality findings produced."
+                f"LLM enrichment failed ({type(exc).__name__}); deterministic findings retained."
             )
             return
 
@@ -484,7 +565,7 @@ class QualityAgent:
         if parsed is None:
             result.mark_degraded("LLM response was not usable JSON.")
             result.notes.append(
-                "LLM response could not be parsed; no quality findings produced."
+                "LLM response could not be parsed; deterministic findings retained."
             )
             return
 
@@ -632,6 +713,7 @@ class QualityAgent:
                         _reject("name a symbol that does not exist in the file", item)
                         continue
                     line = info.start_line
+                    symbol = info.name
 
                 ranges = getattr(self, "_changed_ranges", {}).get(rel_path)
                 if info is not None and ranges is not None and not function_overlaps_diff(info.start_line, info.end_line, ranges):
@@ -699,7 +781,6 @@ class QualityAgent:
         except (OSError, SyntaxError, ValueError):
             return "advisory", None
         rule = canonical_rule(str(item.get("rule_violated", "")))
-        plain = passage.replace("*", "")
         if rule == "import_order":
             explanation = str(item.get("explanation", ""))
             mentioned = re.findall(r"['`]([a-zA-Z_]\w*(?:\.\w+)+)['`]", explanation)
@@ -720,26 +801,15 @@ class QualityAgent:
                           and any(alias.name == "annotations" for alias in item.names) for item in tree.body)
             if present:
                 return "contradicted", "The pinned module already imports annotations from __future__."
-            if "from __future__ import annotations" in plain:
-                return "verified", "The required annotations future import is absent from the pinned module."
-            return "advisory", None
-        if node and rule == "maximum_function_length":
-            limit = re.search(r"(?:not exceed|at most|maximum of)\s+(\d+)\s+lines", plain, re.I)
-            if limit:
-                excluded = set()
-                if ast.get_docstring(node) is not None:
-                    doc = node.body[0]
-                    excluded.update(range(doc.lineno, doc.end_lineno + 1))
-                lines = source.splitlines()
-                count = sum(bool(lines[i-1].strip()) and not lines[i-1].lstrip().startswith("#") and i not in excluded for i in range(node.body[0].lineno, node.end_lineno + 1))
-                threshold = int(limit[1])
-                return ("verified" if count > threshold else "contradicted", f"{symbol} contains {count} nonblank logic lines; the cited limit is {threshold}.")
-        if node and ("parameter" in rule or "argument" in rule):
-            limit = re.search(r"(\d+) or fewer positional parameters", plain, re.I)
-            if limit:
-                count = sum(a.arg not in {"self", "cls"} for a in node.args.posonlyargs + node.args.args)
-                threshold = int(limit[1])
-                return ("verified" if count > threshold else "contradicted", f"{symbol} accepts {count} positional parameters; the cited limit is {threshold}.")
+        rules, _ = supported_rules([RetrievedPassage(passage, '', 0, '')])
+        if 'parameter' in rule or 'argument' in rule:
+            rule = 'maximum_positional_parameters'
+        method = next((method for _, item_node, method in functions(tree) if item_node is node), False)
+        for supported in rules:
+            if supported.name == rule:
+                violated, explanation = evaluate(supported, source, tree, symbol, node, method=method)
+                if violated is not None:
+                    return ('verified' if violated else 'contradicted'), explanation
         return "advisory", None
 
     # ------------------------------------------------------------------ #
@@ -881,6 +951,9 @@ class QualityAgent:
                 by_key[key] = finding
                 continue
             collapsed += 1
+            if finding.evidence_kind == 'verified' and existing.evidence_kind != 'verified':
+                by_key[key] = finding
+                continue
             if _SEVERITY_RANK.get(finding.severity, 99) < _SEVERITY_RANK.get(
                 existing.severity, 99
             ):

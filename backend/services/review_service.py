@@ -182,6 +182,8 @@ def _run_review_body(db, review, *, installation_id=None):
     try:
         from backend.services.progress import recorder
         progress = recorder(db.get_bind(), review.id, review.attempt)
+        logger.info("review=%s phase=checkout input repo=%r pr=%s base=%r head=%r attempt=%s",
+                    review_id, review.repo_full_name, review.pr_number, review.base_sha, review.commit_sha, review.attempt)
         progress("checkout", "started")
         with checkout_pr(
             review.repo_full_name,
@@ -190,6 +192,7 @@ def _run_review_body(db, review, *, installation_id=None):
             **checkout_kwargs,
         ) as workspace_ctx:
             progress("checkout", "ok")
+            logger.info("review=%s phase=checkout output workspace_ready=True", review_id)
             logger.info("Review %d waiting for global review lock", review_id)
             with _review_run_lock:
                 logger.info("Review %d acquired global review lock", review_id)
@@ -233,6 +236,8 @@ def _execute_graph_and_persist(
         base_ref=review.base_ref,
     )
 
+    logger.info("review=%s phase=diff output changed_files=%r diff_chars=%d standards=%r",
+                review.id, changed_files, len(diff), review.standards_version)
     initial_state: ReviewState = {
         "review_id": review.id,
         "pr": pr_metadata,
@@ -257,7 +262,7 @@ def _execute_graph_and_persist(
     progress("analysis", "started")
     from backend.services.agent_checkpoints import AgentCheckpoints, validation_fingerprint
     settings = get_settings()
-    identity = ["agent-correctness-v4-ts5.7.3", validation_fingerprint(), installation_id, review.repo_full_name, review.commit_sha,
+    identity = ["agent-correctness-v5-deterministic-quality-ts5.7.3", validation_fingerprint(), installation_id, review.repo_full_name, review.commit_sha,
                 review.base_sha, review.standards_version, diff, settings.llm_provider,
                 settings.groq_model, settings.gemini_model, settings.llm_tpm_limit]
     fingerprint = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
@@ -265,8 +270,10 @@ def _execute_graph_and_persist(
     graph = build_supervisor_graph(progress=progress, analysis_deadline=analysis_deadline,
                                    checkpoints=checkpoints)
     final_state = graph.invoke(initial_state)
+    logger.info("review=%s phase=aggregation input outcomes=%s", review.id, final_state.get("agent_outcomes"))
     progress("aggregation", "started")
     report = aggregate(final_state)
+    logger.info("review=%s phase=aggregation output findings=%d", review.id, len(report.findings))
     _persist_findings(db, review, report)
     _persist_agent_runs(db, review, final_state, report)
 
@@ -285,6 +292,8 @@ def _execute_graph_and_persist(
     db.add(ReviewProgress(review_id=review.id, attempt=review.attempt or 0,
         stage="aggregation", status="ok"))
     db.commit()
+    logger.info("review=%s phase=persistence output status=completed findings=%d report_chars=%d delivery=pending",
+                review.id, len(report.findings), len(comment_md))
 
 
 def _persist_findings(db: Session, review: Review, report: AggregatedReport) -> None:
@@ -459,6 +468,8 @@ def deliver_report(db: Session, review: Review) -> None:
     )
     db.commit()
     try:
+        logger.info("review=%s phase=delivery input attempt=%s report_chars=%d", review.id,
+                    review.delivery_attempts, len(review.report_markdown or ""))
         _post_pr_comment(review, review.report_markdown or "", installation_id=review.installation_id)
         review.delivery_status = "posted"
         review.delivery_retry_at = None
@@ -471,6 +482,8 @@ def deliver_report(db: Session, review: Review) -> None:
         review.delivery_status = "failed"
         review.delivery_error = f"GitHub delivery failed ({type(exc).__name__})."
     db.commit()
+    logger.info("review=%s phase=delivery output status=%s comment_id=%r error=%r",
+                review.id, review.delivery_status, review.comment_id, review.delivery_error)
 
 
 def _run_git_diff(workspace_path: str, args: list[str], what: str) -> str | None:

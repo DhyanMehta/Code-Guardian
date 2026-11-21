@@ -18,7 +18,7 @@ quality_checkpoints: ContextVar["AgentCheckpoints | None"] = ContextVar("quality
 def validation_fingerprint():
     root = Path(__file__).resolve().parents[1]
     paths = [root / "agents" / name for name in
-             ("quality_agent.py", "_validation.py", "frontend_analysis.py", "test_gap_agent.py", "documentation_agent.py")]
+             ("quality_agent.py", "quality_rules.py", "_validation.py", "frontend_analysis.py", "test_gap_agent.py", "documentation_agent.py")]
     paths += [root / "tools/frontend_ast.cjs", root / "tools/parser/package-lock.json"]
     paths += sorted((root / "tools/semgrep_rules").glob("*.yml"))
     digest = hashlib.sha256()
@@ -35,7 +35,7 @@ class AgentCheckpoints:
         self.fingerprint = fingerprint
 
     def quality_batch(self, batch: str) -> "AgentCheckpoints":
-        identity = hashlib.sha256(f"quality-batch-v1:{self.fingerprint}:{batch}".encode()).hexdigest()
+        identity = hashlib.sha256(f"quality-batch-v2-deterministic:{self.fingerprint}:{batch}".encode()).hexdigest()
         return AgentCheckpoints(self.bind, self.review_id, identity)
 
     def load(self, agent: str) -> dict | None:

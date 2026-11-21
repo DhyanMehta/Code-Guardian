@@ -215,7 +215,19 @@ def build_supervisor_graph(progress=None, *, analysis_deadline=None, checkpoints
                 core_done if analysis_deadline is not None and name in {"test_gap", "documentation"} else None
             )
             try:
-                return run(state)
+                pr = state.get("pr")
+                logger.info("review=%s phase=%s input files=%r diff_chars=%d",
+                            state.get("review_id"), name, pr.changed_files if pr else [], len(state.get("diff") or ""))
+                result = run(state)
+                coverage = result.get("agent_coverage", {}).get(name, {})
+                logger.info("review=%s phase=%s output outcome=%s findings=%s analyzed=%r excluded=%r batches=%s scanners=%r",
+                            state.get("review_id"), name, result["agent_outcomes"][name], coverage.get("findings"),
+                            coverage.get("analyzed_files"), coverage.get("excluded_files"), coverage.get("batches"),
+                            coverage.get("scanners"))
+                return result
+            except Exception as exc:
+                logger.error("review=%s phase=%s error=%s", state.get("review_id"), name, type(exc).__name__)
+                raise
             finally:
                 required_analysis_done.reset(token)
                 if name in {"security", "quality"}:
