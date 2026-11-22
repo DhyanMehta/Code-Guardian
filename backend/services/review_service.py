@@ -122,6 +122,14 @@ def run_review(db: Session, review_id: int, *, installation_id: int | None = Non
         logger.error("Review %d not found in DB", review_id)
         return
 
+    if get_settings().review_provider_request_limit is not None and review.attempt:
+        if review.status == "pending":
+            review.status = "failed"
+            review.completed_at = _utcnow()
+            review.summary = "The single budgeted review attempt has already been used."
+            db.commit()
+        return
+
     if not start_review(db, review):
         logger.info(
             "Review %d skipped: another review is running for %s#%d",
@@ -267,10 +275,12 @@ def _execute_graph_and_persist(
     identity = ["agent-correctness-v5-deterministic-quality-ts5.7.3", validation_fingerprint(), installation_id, review.repo_full_name, review.commit_sha,
                 review.base_sha, review.standards_version, diff, settings.llm_provider,
                 settings.groq_model, settings.gemini_model, settings.llm_tpm_limit]
+    if settings.review_provider_request_limit is not None:
+        identity.append(settings.review_provider_request_limit)
     fingerprint = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
     checkpoints = AgentCheckpoints(db.get_bind(), review.id, fingerprint)
     graph = build_supervisor_graph(progress=progress, analysis_deadline=analysis_deadline,
-                                   checkpoints=checkpoints)
+                                   checkpoints=checkpoints, provider_request_limit=settings.review_provider_request_limit)
     final_state = graph.invoke(initial_state)
     logger.info("review=%s phase=aggregation input outcomes=%s", review.id, final_state.get("agent_outcomes"))
     progress("aggregation", "started")

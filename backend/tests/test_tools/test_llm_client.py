@@ -9,6 +9,7 @@ import pytest
 from groq import (
     APIConnectionError,
     AuthenticationError,
+    BadRequestError,
     RateLimitError,
 )
 
@@ -16,7 +17,9 @@ from backend.tools.llm_client import (
     LLMAuthError,
     LLMClient,
     LLMConfigError,
+    LLMError,
     LLMRateLimitError,
+    LLMRequestBudgetError,
     LLMResponseError,
     LLMServiceError,
     TokenBucketLimiter,
@@ -79,6 +82,85 @@ def test_complete_success() -> None:
     out = client.complete(system_prompt="s", user_prompt="u")
     assert out == "triaged output"
     assert create.calls == 1
+
+
+@pytest.mark.parametrize("error", [
+    APIConnectionError(request=_REQ),
+    BadRequestError("empty generation", response=_resp(400),
+                    body={"error": {"code": "json_validate_failed", "failed_generation": ""}}),
+], ids=["transient", "empty-generation"])
+def test_review_cap_counts_retry_sends(monkeypatch, error):
+    from backend.config import get_settings
+    from backend.tools.review_budget import ProviderRequestBudget, provider_request_budget
+
+    monkeypatch.setattr(get_settings(), "llm_empty_generation_retry_delay", 0)
+    provider = _FakeCreate([error, error])
+    client = _make_client(provider, max_retries=3, backoff_base=0)
+    token = provider_request_budget.set(ProviderRequestBudget(2))
+    try:
+        with pytest.raises(LLMRequestBudgetError, match="limit exhausted"):
+            client.complete(system_prompt="s", user_prompt="u")
+        assert provider.calls == 2
+    finally:
+        provider_request_budget.reset(token)
+
+
+def test_expired_review_does_not_spend_request_allowance():
+    from backend.tools.llm_client import LLMBudgetError
+    from backend.tools.review_budget import ProviderRequestBudget, deadline, provider_request_budget
+
+    provider = _FakeCreate([_completion("ok")])
+    client = _make_client(provider)
+    allowance = ProviderRequestBudget(1)
+    budget_token = provider_request_budget.set(allowance)
+    expired = deadline.set(0.0)
+    try:
+        try:
+            with pytest.raises(LLMBudgetError):
+                client.complete(system_prompt="s", user_prompt="u")
+            assert provider.calls == 0
+            assert allowance.available()
+        finally:
+            deadline.reset(expired)
+        assert client.complete(system_prompt="s", user_prompt="u") == "ok"
+        assert provider.calls == 1
+    finally:
+        provider_request_budget.reset(budget_token)
+
+
+def test_configured_budget_without_worker_context_fails_closed(monkeypatch):
+    from backend.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "review_provider_request_limit", 1)
+    provider = _FakeCreate([])
+    with pytest.raises(LLMRequestBudgetError, match="context is missing"):
+        _make_client(provider).complete(system_prompt="s", user_prompt="u")
+    assert provider.calls == 0
+
+
+def test_budgeted_groq_transport_cannot_follow_redirects(monkeypatch):
+    from backend.config import get_settings
+    from backend.tools.review_budget import ProviderRequestBudget, provider_request_budget
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "review_provider_request_limit", 2)
+    monkeypatch.setattr(settings, "llm_provider", "groq")
+    sent = []
+
+    def transport(request):
+        sent.append(request.url)
+        return httpx.Response(307, headers={"Location": "/second-send"}, request=request)
+
+    monkeypatch.setattr("backend.tools.llm_client.DefaultHttpxClient", lambda **opts: httpx.Client(
+        transport=httpx.MockTransport(transport), **opts,
+    ))
+    token = provider_request_budget.set(ProviderRequestBudget(2))
+    try:
+        with pytest.raises(LLMError, match="provider error"):
+            LLMClient(api_key="fixture", max_retries=0).complete(system_prompt="s", user_prompt="u")
+        assert len(sent) == 1
+    finally:
+        provider_request_budget.reset(token)
 
 
 def test_agent_metrics_count_retries_and_reported_usage(monkeypatch, caplog):

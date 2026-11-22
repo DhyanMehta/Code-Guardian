@@ -24,6 +24,7 @@ def test_review_run_lock_released_on_exception():
          patch("backend.services.review_service._execute_graph_and_persist") as execute_mock:
         
         settings_mock.return_value.require.return_value = "dummy_token"
+        settings_mock.return_value.review_provider_request_limit = None
         
         # Make checkout_pr return a dummy context manager
         workspace_ctx = MagicMock()

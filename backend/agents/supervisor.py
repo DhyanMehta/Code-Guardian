@@ -198,14 +198,16 @@ def _aggregate(state: ReviewState) -> dict[str, Any]:
     return {}
 
 
-def build_supervisor_graph(progress=None, *, analysis_deadline=None, checkpoints=None) -> StateGraph:
+def build_supervisor_graph(progress=None, *, analysis_deadline=None, checkpoints=None, provider_request_limit=None) -> StateGraph:
     """Construct and compile the supervisor StateGraph."""
     from threading import Event, Lock
+    from backend.tools.review_budget import ProviderRequestBudget, provider_request_budget
 
     graph = StateGraph(ReviewState)
     core_done = Event()
     core_lock = Lock()
     core_pending = {"security", "quality"}
+    request_budget = None if provider_request_limit is None else ProviderRequestBudget(provider_request_limit)
 
     def tracked(name, node):
         def execute(state):
@@ -214,6 +216,7 @@ def build_supervisor_graph(progress=None, *, analysis_deadline=None, checkpoints
             token = required_analysis_done.set(
                 core_done if analysis_deadline is not None and name in {"test_gap", "documentation"} else None
             )
+            request_token = provider_request_budget.set(request_budget)
             try:
                 pr = state.get("pr")
                 logger.info("review=%s phase=%s input files=%r diff_chars=%d",
@@ -229,6 +232,7 @@ def build_supervisor_graph(progress=None, *, analysis_deadline=None, checkpoints
                 logger.error("review=%s phase=%s error=%s", state.get("review_id"), name, type(exc).__name__)
                 raise
             finally:
+                provider_request_budget.reset(request_token)
                 required_analysis_done.reset(token)
                 if name in {"security", "quality"}:
                     with core_lock:

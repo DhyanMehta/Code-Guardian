@@ -36,6 +36,21 @@ def db_session():
     session.close()
 
 
+def test_budgeted_worker_does_not_restart_spent_attempt(db_session, monkeypatch):
+    from backend.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "review_provider_request_limit", 6)
+    review = create_review(db_session, repo_full_name="owner/repo", pr_number=1, head_sha="head")
+    review.attempt = 1
+    db_session.commit()
+    with patch("backend.services.review_service._run_review_body") as execute:
+        run_review(db_session, review.id)
+        execute.assert_not_called()
+    assert review.status == "failed"
+    assert review.attempt == 1
+    assert "already been used" in review.summary
+
+
 class TestCreateReview:
     def test_creates_pending_review(self, db_session):
         review = create_review(
@@ -384,7 +399,7 @@ class TestRunReview:
 
         settings = get_settings()
         for field in ("review_timeout_seconds", "llm_provider", "groq_model",
-                      "gemini_model", "llm_tpm_limit"):
+                      "gemini_model", "llm_tpm_limit", "review_provider_request_limit"):
             setattr(mock_settings.return_value, field, getattr(settings, field))
         mock_settings.return_value.require.return_value = "fake-token"
 
@@ -470,7 +485,7 @@ class TestReviewStateTransitions:
 
         settings = get_settings()
         for field in ("review_timeout_seconds", "llm_provider", "groq_model",
-                      "gemini_model", "llm_tpm_limit"):
+                      "gemini_model", "llm_tpm_limit", "review_provider_request_limit"):
             setattr(mock_settings.return_value, field, getattr(settings, field))
         mock_settings.return_value.require.return_value = "fake-token"
         mock_ctx = MagicMock()

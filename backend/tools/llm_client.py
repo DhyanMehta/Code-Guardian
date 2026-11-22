@@ -30,6 +30,7 @@ from groq import (
     APITimeoutError,
     AuthenticationError,
     BadRequestError,
+    DefaultHttpxClient,
     InternalServerError,
     PermissionDeniedError,
     RateLimitError,
@@ -50,6 +51,10 @@ class LLMError(Exception):
 
 class LLMBudgetError(LLMError):
     """The review cannot afford to wait for another provider operation."""
+
+
+class LLMRequestBudgetError(LLMBudgetError):
+    """The opt-in review request allowance is exhausted or unavailable."""
 
 
 def _budget_timeout(cap: float) -> float:
@@ -418,6 +423,11 @@ class LLMClient:
         if client is not None:
             self._client = client
         else:
+            # A redirect would otherwise cause an extra HTTP send inside the SDK.
+            transport_options = {}
+            if settings.review_provider_request_limit is not None:
+                transport_class = openai.DefaultHttpxClient if self.provider == "gemini" else DefaultHttpxClient
+                transport_options["http_client"] = transport_class(follow_redirects=False)
             if self.provider == "gemini":
                 resolved_key = api_key if api_key is not None else settings.gemini_api_key
                 if not resolved_key:
@@ -428,7 +438,8 @@ class LLMClient:
                     api_key=resolved_key,
                     timeout=self.timeout,
                     max_retries=0,
-                    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+                    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                    **transport_options,
                 )
             else:
                 resolved_key = api_key if api_key is not None else settings.groq_api_key
@@ -438,7 +449,7 @@ class LLMClient:
                     )
                 # Disable SDK-level retries; this wrapper owns retry/backoff.
                 self._client = Groq(
-                    api_key=resolved_key, timeout=self.timeout, max_retries=0
+                    api_key=resolved_key, timeout=self.timeout, max_retries=0, **transport_options,
                 )
 
     def complete(
@@ -505,6 +516,11 @@ class LLMClient:
         limiter: TokenBucketLimiter | None = None,
     ) -> str:
         """Issue the request, retrying transient failures with backoff."""
+        from backend.tools.review_budget import provider_request_budget, remaining
+
+        budget = provider_request_budget.get()
+        if budget is None and get_settings().review_provider_request_limit is not None:
+            raise LLMRequestBudgetError("Provider request budget context is missing.")
         if limiter is None:
             limiter = _get_token_limiter()
 
@@ -514,16 +530,19 @@ class LLMClient:
             try:
                 for gen_attempt in range(3):
                     try:
+                        if budget is not None and not budget.available():
+                            raise LLMRequestBudgetError("Review provider request limit exhausted.")
                         reservation_ts = uuid.uuid4().hex
                         limiter.reserve_request(estimated_tokens, reservation_ts)
                         measure('estimated_reserved_tokens', estimated_tokens)
                         with _throttled_call():
                             if not limiter.can_send(reservation_ts):
                                 raise LLMBudgetError("Provider reservation expired or entered cooldown while waiting for a slot.")
-                            from backend.tools.review_budget import remaining
                             request_kwargs = dict(create_kwargs)
                             if remaining() is not None:
                                 request_kwargs["timeout"] = _budget_timeout(self.timeout)
+                            if budget is not None and not budget.claim():
+                                raise LLMRequestBudgetError("Review provider request limit exhausted.")
                             measure('requests')
                             response = self._client.chat.completions.create(**request_kwargs)
                         break

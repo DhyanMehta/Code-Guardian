@@ -12,6 +12,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve the .env file(s) to absolute paths so secrets load regardless of the
@@ -53,6 +54,14 @@ class Settings(BaseSettings):
     review_timeout_seconds: int = 900
     worker_poll_seconds: float = 2.0
     max_review_attempts: int = 2
+    # Acceptance worker only. None preserves ordinary provider behavior.
+    review_provider_request_limit: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_review_request_limit(self) -> Settings:
+        if self.review_provider_request_limit is not None and self.max_review_attempts != 1:
+            raise ValueError("REVIEW_PROVIDER_REQUEST_LIMIT requires MAX_REVIEW_ATTEMPTS=1.")
+        return self
 
     # LLM configuration. Default to Groq.
     llm_provider: str = "groq"

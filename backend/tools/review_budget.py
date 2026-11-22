@@ -2,12 +2,36 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 from time import monotonic
-from threading import Event
+from threading import Event, Lock
 
 deadline: ContextVar[float | None] = ContextVar("review_deadline", default=None)
 
 
 required_analysis_done: ContextVar[Event | None] = ContextVar("required_analysis_done", default=None)
+
+
+class ProviderRequestBudget:
+    """One shared send allowance for all agents in one worker attempt."""
+
+    def __init__(self, limit: int):
+        self._remaining = limit
+        self._lock = Lock()
+
+    def available(self) -> bool:
+        with self._lock:
+            return self._remaining > 0
+
+    def claim(self) -> bool:
+        with self._lock:
+            if self._remaining == 0:
+                return False
+            self._remaining -= 1
+            return True
+
+
+provider_request_budget: ContextVar[ProviderRequestBudget | None] = ContextVar(
+    "provider_request_budget", default=None,
+)
 
 
 @contextmanager
