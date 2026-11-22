@@ -14,7 +14,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from backend.db.models import Base, Installation, Review, User, UserInstallation
-from backend.services.review_service import StaleDeliveryError, _post_pr_comment, deliver_report
+from backend.services.review_service import PublicationConflictError, StaleDeliveryError, _post_pr_comment, deliver_report
 
 
 class FakePullRequest:
@@ -61,17 +61,20 @@ def publication(monkeypatch):
         repo = SimpleNamespace(get_pull=Mock(return_value=pr))
         client = SimpleNamespace(get_repo=Mock(return_value=repo))
         app_client = Mock(return_value=client)
+        lookup = Mock(return_value=SimpleNamespace(id=inst.id, suspended_at=None, app_slug="codeguardian"))
+        integration = SimpleNamespace(get_repo_installation=lookup)
         authorize = Mock()
         user_client = Mock(side_effect=AssertionError("User identity must not publish"))
         legacy_client = Mock(side_effect=AssertionError("Legacy PAT must not publish"))
         monkeypatch.setattr("backend.tools.github_app.get_installation_github", app_client)
+        monkeypatch.setattr("backend.tools.github_app.get_integration", lambda: integration)
         monkeypatch.setattr("backend.services.authorization.require_repo", authorize)
         monkeypatch.setattr("backend.services.authorization.user_github", user_client)
         monkeypatch.setattr("github.Github", legacy_client)
         yield SimpleNamespace(
             db=db, user=user, inst=inst, review=review, pr=pr,
             client=client, app_client=app_client, authorize=authorize,
-            user_client=user_client, legacy_client=legacy_client,
+            user_client=user_client, legacy_client=legacy_client, lookup=lookup,
         )
     engine.dispose()
 
@@ -85,7 +88,8 @@ def test_both_review_origins_publish_as_installation_bot(publication, manual):
     assert len(p.pr.comments) == 1
     assert p.pr.comments[0].user.login == "codeguardian[bot]"
     assert p.review.comment_id == str(p.pr.comments[0].id)
-    p.app_client.assert_called_once_with(p.inst.id)
+    p.lookup.assert_called_once_with("owner", "repo")
+    p.app_client.assert_called_once_with(p.inst.id, retry=0)
     p.user_client.assert_not_called()
     p.legacy_client.assert_not_called()
     if manual:
@@ -97,7 +101,7 @@ def test_both_review_origins_publish_as_installation_bot(publication, manual):
 def test_stored_installation_is_used_when_no_override_is_supplied(publication):
     p = publication
     _post_pr_comment(p.review, p.review.report_markdown)
-    p.app_client.assert_called_once_with(p.inst.id)
+    p.app_client.assert_called_once_with(p.inst.id, retry=0)
     assert len(p.pr.comments) == 1
 
 
@@ -153,6 +157,11 @@ def test_repository_removed_from_installation_cannot_publish(publication):
     p = publication
     p.review.requested_by = None
     p.db.commit()
+    p.lookup.return_value.id = 999
+    with pytest.raises(ValueError, match="expected active App installation"):
+        _post_pr_comment(p.review, p.review.report_markdown, installation_id=p.inst.id)
+    p.app_client.assert_not_called()
+    p.lookup.return_value.id = p.inst.id
     p.client.get_repo.side_effect = PermissionError("Repository is not accessible to this installation")
     with pytest.raises(PermissionError):
         _post_pr_comment(p.review, p.review.report_markdown, installation_id=p.inst.id)
@@ -204,8 +213,27 @@ def test_ambiguous_or_modified_review_marker_never_creates_another_comment(publi
     p.pr.comments.append(existing)
     if conflict == "duplicate-marker":
         p.pr.comments.append(SimpleNamespace(id=1235, body=body, user=existing.user))
-    with pytest.raises(Exception):
+    with pytest.raises(PublicationConflictError):
         _post_pr_comment(p.review, p.review.report_markdown, installation_id=p.inst.id)
+    assert not p.pr.created_bodies
+
+
+@pytest.mark.parametrize("state", ["missing", "marker-removed", "different-bot"])
+def test_saved_comment_conflict_requires_operator_review(publication, state):
+    p = publication
+    p.review.comment_id = "1234"
+    body = f"<!-- codeguardian-review:{p.review.id} -->\n{p.review.report_markdown}"
+    if state != "missing":
+        p.pr.comments.append(SimpleNamespace(
+            id=1234, body=p.review.report_markdown if state == "marker-removed" else body,
+            user=SimpleNamespace(login="other[bot]" if state == "different-bot" else "codeguardian[bot]", type="Bot"),
+        ))
+    p.db.commit()
+    deliver_report(p.db, p.review)
+    assert p.review.delivery_status == "failed"
+    assert p.review.delivery_error
+    assert p.review.delivery_retry_at is None
+    assert p.review.comment_id == "1234"
     assert not p.pr.created_bodies
 
 

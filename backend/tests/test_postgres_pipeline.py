@@ -263,7 +263,13 @@ def test_report_delivery_reconciles_existing_comment_and_skips_stale_head(pg):
         review.report_markdown = "Saved report."
         review.delivery_status = "pending"
         db.commit()
-        with patch("backend.tools.github_app.get_installation_github") as get_github:
+        with (
+            patch("backend.tools.github_app.get_integration") as get_integration,
+            patch("backend.tools.github_app.get_installation_github") as get_github,
+        ):
+            get_integration.return_value.get_repo_installation.return_value = SimpleNamespace(
+                id=990, app_slug="codeguardian", suspended_at=None,
+            )
             pr = get_github.return_value.get_repo.return_value.get_pull.return_value
             pr.head.sha = "new"
             pr.get_issue_comments.return_value = []
@@ -273,7 +279,10 @@ def test_report_delivery_reconciles_existing_comment_and_skips_stale_head(pg):
             pr.create_issue_comment.assert_not_called()
 
             pr.get_issue_comments.return_value = [
-                SimpleNamespace(id=123, body=f"<!-- codeguardian-review:{review.id} -->\nSaved report.")
+                SimpleNamespace(
+                    id=123, body=f"<!-- codeguardian-review:{review.id} -->\nSaved report.",
+                    user=SimpleNamespace(login="codeguardian[bot]", type="Bot"),
+                )
             ]
             deliver_report(db, review)
             assert review.delivery_status == "posted"

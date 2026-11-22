@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from backend.agents.state import AgentOutcome, PRMetadata, ReviewState
 from backend.agents.supervisor import AGENT_NAMES, build_supervisor_graph
@@ -413,44 +413,75 @@ class StaleDeliveryError(Exception):
     """The pull request has moved beyond the reviewed revision."""
 
 
+class PublicationConflictError(RuntimeError):
+    """Existing publication evidence conflicts with the saved report."""
+
+
+def _publication_client(review: Review, installation_id: int | None):
+    from backend.services.authorization import require_repo
+    from backend.tools.github_app import get_installation_github, get_integration
+
+    db = object_session(review)
+    stored_id = review.installation_id
+    if db is None or stored_id is None or (installation_id is not None and installation_id != stored_id):
+        raise ValueError("Review has no matching installation context.")
+    installation = db.get(Installation, stored_id)
+    if installation is None or installation.uninstalled_at or installation.suspended_at:
+        raise ValueError("Review installation is unavailable.")
+    parts = review.repo_full_name.split("/")
+    if len(parts) != 2 or not all(parts) or not review.pr_number or not review.commit_sha:
+        raise ValueError("Review has incomplete pull request context.")
+    if review.requested_by is not None:
+        user = db.get(User, review.requested_by)
+        if user is None:
+            raise ValueError("Review requester is unavailable.")
+        require_repo(user, stored_id, review.repo_full_name, write=True)
+
+    remote = get_integration().get_repo_installation(*parts)
+    if remote.id != stored_id or remote.suspended_at or not remote.app_slug:
+        raise ValueError("Repository does not have the expected active App installation.")
+    # Each uncertain write must be reconciled by the worker before another POST.
+    return get_installation_github(stored_id, retry=0), f"{remote.app_slug}[bot]"
+
+
 def _post_pr_comment(
     review: Review,
     comment_md: str,
     *,
     installation_id: int | None = None,
 ) -> None:
-    """Post the review comment to the GitHub PR."""
-    try:
-        if review.requested_by:
-            from sqlalchemy.orm import object_session
-            from backend.services.authorization import user_github
-            gh = user_github(object_session(review).get(User, review.requested_by))
-        elif installation_id is not None:
-            from backend.tools.github_app import get_installation_github
-            gh = get_installation_github(installation_id)
-        else:
-            from github import Github
-            settings = get_settings()
-            token = settings.require("github_token")
-            gh = Github(token, timeout=15)
-
-        repo = gh.get_repo(review.repo_full_name)
-        pr = repo.get_pull(review.pr_number)
-        marker = f"<!-- codeguardian-review:{review.id} -->"
-        body = marker + "\n" + comment_md
-        existing = next((c for c in pr.get_issue_comments() if (c.body or "") == body), None)
-        if existing is None and review.commit_sha and pr.head.sha != review.commit_sha:
+    """Publish or reconcile the persisted PR report using the installation bot."""
+    if review.id is None or review.status != "completed" or not comment_md or review.report_markdown != comment_md:
+        raise ValueError("A completed review with its saved report is required.")
+    gh, bot = _publication_client(review, installation_id)
+    pr = gh.get_repo(review.repo_full_name).get_pull(review.pr_number)
+    marker = f"<!-- codeguardian-review:{review.id} -->"
+    body = marker + "\n" + comment_md
+    matches = [
+        comment for comment in pr.get_issue_comments()
+        if marker in (comment.body or "") or str(comment.id) == review.comment_id
+    ]
+    if len(matches) > 1:
+        raise PublicationConflictError("Multiple comments match the review marker or saved comment ID.")
+    if matches:
+        comment = matches[0]
+    else:
+        if review.comment_id is not None:
+            raise PublicationConflictError("The saved comment ID is missing from the pull request.")
+        if pr.head.sha != review.commit_sha:
             raise StaleDeliveryError("The PR head changed after this review.")
-        comment = existing or pr.create_issue_comment(body)
-        review.comment_id = str(comment.id)
-        logger.info("Posted PR comment to %s#%d", review.repo_full_name, review.pr_number)
-    except Exception as exc:
-        logger.error(
-            "Failed to post PR comment for review %d: %s",
-            review.id,
-            exc,
-        )
-        raise
+        comment = pr.create_issue_comment(body)
+    if (
+        comment.id is None
+        or (review.comment_id is not None and str(comment.id) != review.comment_id)
+        or comment.body != body
+        or comment.user is None
+        or comment.user.type != "Bot"
+        or (comment.user.login or "").casefold() != bot.casefold()
+    ):
+        raise PublicationConflictError("Comment ID, author, marker or body conflicts with the saved report.")
+    review.comment_id = str(comment.id)
+    logger.info("Confirmed PR comment on %s#%d", review.repo_full_name, review.pr_number)
 
 
 def deliver_report(db: Session, review: Review) -> None:
@@ -477,6 +508,10 @@ def deliver_report(db: Session, review: Review) -> None:
         review.delivery_retry_at = None
         review.delivery_status = "failed"
         review.delivery_error = "GitHub delivery skipped because the PR head changed."
+    except PublicationConflictError as exc:
+        review.delivery_retry_at = None
+        review.delivery_status = "failed"
+        review.delivery_error = str(exc)
     except Exception as exc:
         review.delivery_status = "failed"
         review.delivery_error = f"GitHub delivery failed ({type(exc).__name__})."

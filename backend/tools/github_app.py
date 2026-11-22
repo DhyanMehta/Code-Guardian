@@ -151,10 +151,12 @@ def get_installation_auth(installation_id: int) -> Auth.Token:
     return Auth.Token(token)
 
 
-def get_installation_github(installation_id: int) -> Github:
+def get_installation_github(installation_id: int, *, retry=None) -> Github:
     """Return a ``Github`` client authenticated as *installation_id*."""
     auth = get_installation_auth(installation_id)
-    return Github(auth=auth, timeout=15)
+    if retry is None:
+        return Github(auth=auth, timeout=15)
+    return Github(auth=auth, timeout=15, retry=retry)
 
 
 def invalidate_installation(installation_id: int) -> None:

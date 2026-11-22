@@ -112,6 +112,7 @@ class TestRunReviewAndPostCommentAuth:
             mock_exec.assert_called_once()
 
     def test_post_pr_comment_uses_installation_github(self, db_session):
+        from types import SimpleNamespace
         from backend.services.review_service import _post_pr_comment
 
         review = create_review(
@@ -121,6 +122,11 @@ class TestRunReviewAndPostCommentAuth:
             head_sha="sha789",
             installation_id=112233,
         )
+        from backend.db.models import Installation
+        db_session.add(Installation(id=112233, account_login="owner"))
+        review.status = "completed"
+        review.report_markdown = "## Comment"
+        db_session.commit()
 
         mock_gh = MagicMock()
         mock_repo = MagicMock()
@@ -128,13 +134,25 @@ class TestRunReviewAndPostCommentAuth:
         mock_gh.get_repo.return_value = mock_repo
         mock_repo.get_pull.return_value = mock_pr
         mock_pr.head.sha = "sha789"
+        mock_pr.get_issue_comments.return_value = []
+        body = f"<!-- codeguardian-review:{review.id} -->\n## Comment"
+        mock_pr.create_issue_comment.return_value = SimpleNamespace(
+            id=123, body=body, user=SimpleNamespace(login="codeguardian[bot]", type="Bot"),
+        )
+        integration = MagicMock()
+        integration.get_repo_installation.return_value = SimpleNamespace(
+            id=112233, app_slug="codeguardian", suspended_at=None,
+        )
 
-        with patch("backend.tools.github_app.get_installation_github", return_value=mock_gh) as mock_get_gh:
+        with (
+            patch("backend.tools.github_app.get_integration", return_value=integration),
+            patch("backend.tools.github_app.get_installation_github", return_value=mock_gh) as mock_get_gh,
+        ):
             _post_pr_comment(review, "## Comment", installation_id=112233)
-            mock_get_gh.assert_called_once_with(112233)
+            mock_get_gh.assert_called_once_with(112233, retry=0)
             mock_gh.get_repo.assert_called_once_with("owner/repo")
             mock_repo.get_pull.assert_called_once_with(20)
-            mock_pr.create_issue_comment.assert_called_once_with(f"<!-- codeguardian-review:{review.id} -->\n## Comment")
+            mock_pr.create_issue_comment.assert_called_once_with(body)
 
 
 
