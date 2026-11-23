@@ -1,9 +1,10 @@
 import {cleanup,render,screen,fireEvent} from '@testing-library/react';
 import {afterEach,it,expect,vi} from 'vitest';
-import {MemoryRouter} from 'react-router-dom';
+import {MemoryRouter,useLocation} from 'react-router-dom';
 import {StrictMode} from 'react';
 import App from '../App';
-import {backend,json,user,review} from './fixtures';
+import {backend,json,user,review,installation,repo} from './fixtures';
+import {appInstallUrl} from '../api/identity';
 import {clearResources} from '../api/resources';
 import {clearWriteStates} from '../api/writes';
 import {navigation} from '../context/AuthContext';
@@ -26,6 +27,83 @@ it('automatically reconciles installation return without a second OAuth login',a
   expect(await screen.findByText('owner/httpx')).toBeInTheDocument();
   expect(fetch.mock.calls.filter(([u])=>u.endsWith('/auth/installations/refresh'))).toHaveLength(1);
   expect(fetch.mock.calls.some(([u])=>u.endsWith('/auth/github/login'))).toBe(false);
+});
+const updatedInstallation = {...installation, id: 8, account_login: 'another-owner'};
+
+function mockUpdateReturn(installations = [installation, updatedInstallation], refresh = () => json({...user, installations})) {
+  const fetch = vi.fn((url: string) => {
+    if (url.endsWith('/auth/installations/refresh')) return Promise.resolve(refresh());
+    if (url.endsWith('/installations')) return Promise.resolve(json(installations));
+    if (url.endsWith('/installations/8/repos')) {
+      return Promise.resolve(json([{...repo, full_name: 'another-owner/new-repo'}]));
+    }
+    return Promise.resolve(backend(url));
+  });
+  vi.stubGlobal('fetch', fetch);
+  return fetch;
+}
+
+function ReturnLocation() {
+  const {pathname, search} = useLocation();
+  return <output aria-label="Return location">{pathname}{search}</output>;
+}
+
+function mountUpdateReturn(query: string) {
+  render(<MemoryRouter initialEntries={[`/auth/install?${query}`]}><App /><ReturnLocation /></MemoryRouter>);
+}
+
+it('refreshes repositories for the second installation on a verified update return', async () => {
+  sessionStorage.setItem(`codeguardian:installation:${user.id}`, String(installation.id));
+  const fetch = mockUpdateReturn();
+  mountUpdateReturn('setup_action=update&installation_id=8');
+
+  expect(await screen.findByText('another-owner/new-repo')).toBeInTheDocument();
+  expect(screen.getByLabelText('Return location')).toHaveTextContent('/repos?installation_id=8');
+  const urls = fetch.mock.calls.map(([url]) => url);
+  expect(urls.filter(url => url.endsWith('/auth/installations/refresh'))).toHaveLength(1);
+  expect(urls.some(url => url.endsWith('/installations/8/repos'))).toBe(true);
+  expect(urls.some(url => url.endsWith('/installations/7/repos'))).toBe(false);
+  expect(urls.some(url => url.endsWith('/auth/github/login'))).toBe(false);
+});
+
+it.each([
+  ['missing', '', updatedInstallation],
+  ['malformed', '&installation_id=abc', updatedInstallation],
+  ['inaccessible', '&installation_id=999', updatedInstallation],
+  ['suspended', '&installation_id=8', {...updatedInstallation, suspended: true}],
+])('keeps an update with a %s installation ID on the return page', async (_case, query, second) => {
+  const fetch = mockUpdateReturn([installation, second]);
+  mountUpdateReturn(`setup_action=update${query}`);
+
+  expect(await screen.findByText('Couldn’t verify which installation was updated.')).toBeInTheDocument();
+  expect(screen.getByLabelText('Return location')).toHaveTextContent('/auth/install');
+  expect(screen.getByRole('link', {name: 'View repositories'})).toHaveAttribute('href', '/repos');
+  expect(screen.getByRole('button', {name: 'Refresh GitHub access'})).toBeEnabled();
+  expect(fetch.mock.calls.some(([url]) => /\/installations\/\d+\/repos$/.test(url))).toBe(false);
+});
+
+it('keeps an explicit cancellation out of the update flow', async () => {
+  const fetch = mockUpdateReturn();
+  mountUpdateReturn('setup_action=update&installation_id=8&error=access_denied');
+
+  expect(await screen.findByText('GitHub did not confirm the repository access update.')).toBeInTheDocument();
+  expect(screen.getByLabelText('Return location')).toHaveTextContent('/auth/install');
+  expect(fetch.mock.calls.some(([url]) => url.endsWith('/auth/installations/refresh'))).toBe(false);
+});
+
+it('offers a retry without redirecting when an update refresh fails', async () => {
+  mockUpdateReturn(undefined, () => json({detail: 'GitHub access temporarily unavailable'}, 502));
+  mountUpdateReturn('setup_action=update&installation_id=8');
+
+  expect(await screen.findByText('GitHub access temporarily unavailable')).toBeInTheDocument();
+  expect(screen.getByLabelText('Return location')).toHaveTextContent('/auth/install');
+  expect(screen.getByRole('button', {name: 'Refresh GitHub access'})).toBeEnabled();
+});
+
+it('builds the GitHub installer URL only for a usable App slug', () => {
+  expect(appInstallUrl('guardian-test')).toBe('https://github.com/apps/guardian-test/installations/new');
+  expect(appInstallUrl('guardian/test')).toBeNull();
+  expect(appInstallUrl(undefined)).toBeNull();
 });
 it('keeps cancelled or approval-pending installation recoverable without redirect loops',async()=>{
   const assign=vi.spyOn(navigation,'assign').mockImplementation(()=>{});
