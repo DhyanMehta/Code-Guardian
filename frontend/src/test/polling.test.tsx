@@ -8,6 +8,31 @@ beforeEach(() => { vi.useFakeTimers(); vi.spyOn(document, 'visibilityState', 'ge
 afterEach(() => { cleanup(); clearResources(); vi.restoreAllMocks(); vi.useRealTimers(); });
 const tick = async (ms = 0) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
 describe('automatic progress updates', () => {
+  it('keeps a shared resource reader bound to its original scope when another subscriber switches', async () => {
+    const first = renderHook(() => useResource('installation:1', async () => 'first installation'));
+    const second = renderHook(({ id }) => useResource('installation:' + id, async () => id === 1 ? 'first installation' : 'second installation'), { initialProps: { id: 1 } });
+    await tick();
+    second.rerender({ id: 2 });
+    await tick();
+    act(() => first.result.current.refresh());
+    await tick();
+    expect(first.result.current.data).toBe('first installation');
+    expect(second.result.current.data).toBe('second installation');
+  });
+
+  it('revisits a recently cached read without leaving an abandoned refresh busy', async () => {
+    const read = vi.fn().mockResolvedValueOnce('saved value').mockImplementationOnce(() => new Promise(() => {}));
+    const initial = renderHook(() => useResource('revisited', read));
+    await tick();
+    act(() => initial.result.current.refresh());
+    expect(initial.result.current.loading).toBe(true);
+    initial.unmount();
+    const revisit = renderHook(() => useResource('revisited', read));
+    await tick();
+    expect(revisit.result.current.data).toBe('saved value');
+    expect(revisit.result.current.loading).toBe(false);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
   it('does not show loading or fetch while a dependent query is disabled', async () => {
     const read = vi.fn().mockResolvedValue('loaded');
     const hook = renderHook(({ key }: { key: string | null }) => useResource(key, read), { initialProps: { key: null } as { key: string | null } });

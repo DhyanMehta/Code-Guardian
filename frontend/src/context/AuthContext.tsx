@@ -48,7 +48,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       sessionStorage.setItem(returnKey, safeReturnPath(returnTo ?? (window.location.pathname === '/' ? '/repos' : window.location.pathname + window.location.search + window.location.hash)));
       const data = await request('/auth/github/login', parse<{ url: string }>(shape({ url: string })), { auth: false, retries: 0 });
       const url = new URL(data.url);
-      if (url.protocol !== 'https:' || url.hostname !== 'github.com') throw new Error('Invalid GitHub authorization URL.');
+      if (url.origin !== 'https://github.com' || url.pathname !== '/login/oauth/authorize' || url.username || url.password) {
+        throw new Error('Invalid GitHub authorization URL.');
+      }
       navigation.assign(url.href);
     } catch (e) { setActionError(errorMessage(e)); }
     finally { action.current = false; setBusy(false); }

@@ -1,145 +1,158 @@
-import { useEffect } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { GitPullRequest, Activity, Cpu, Sliders, FolderGit2, GitBranch, ArrowLeft } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Navigate, useParams, useSearchParams } from 'react-router-dom';
+import { Activity, Cpu, GitPullRequest } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useInstallation } from '../context/InstallationContext';
 import { endpoints } from '../api/endpoints';
 import { useResource } from '../api/resources';
 import { ContextBar } from '../components/layout/ContextBar';
 import { Tabs } from '../components/common/Tabs';
-import { InstallationPicker } from '../components/common/InstallationPicker';
 import { AsyncState } from '../components/common/AsyncState';
 import { PullsTab } from '../components/dashboard/PullsTab';
 import { AnalyticsTab } from '../components/dashboard/AnalyticsTab';
 import { AgentsTab } from '../components/dashboard/AgentsTab';
-import { SettingsTab } from '../components/dashboard/SettingsTab';
+import { installationSettingsUrl } from '../api/identity';
 
 const tabs = [
-  { id: 'pulls', label: 'Pull Requests', icon: <GitPullRequest className="w-4 h-4 shrink-0" /> },
-  { id: 'analytics', label: 'Code Health Analytics', icon: <Activity className="w-4 h-4 shrink-0" /> },
-  { id: 'agents', label: 'Agent Fleet', icon: <Cpu className="w-4 h-4 shrink-0" /> },
-  { id: 'settings', label: 'Settings', icon: <Sliders className="w-4 h-4 shrink-0" /> },
+  { id: 'pulls', label: 'Pull Requests', icon: <GitPullRequest className="size-4 shrink-0" /> },
+  { id: 'analytics', label: 'Analytics', icon: <Activity className="size-4 shrink-0" /> },
+  { id: 'agents', label: 'Agent History', icon: <Cpu className="size-4 shrink-0" /> },
 ];
+const navigationId = 'repository-tabs';
+const wideNavigationQuery = '(min-width: 48rem)';
+
+function RepositoryViews({ active, onChange, children }: { active: string; onChange: (tab: string) => void; children: ReactNode }) {
+  const [wide, setWide] = useState(() => window.matchMedia?.(wideNavigationQuery).matches ?? true);
+  const navigation = useRef<HTMLDivElement>(null);
+  const restoreFocus = useRef(false);
+
+  useEffect(() => {
+    const media = window.matchMedia?.(wideNavigationQuery);
+    if (!media) return;
+    function resize(event: MediaQueryListEvent) {
+      restoreFocus.current = navigation.current?.contains(document.activeElement) ?? false;
+      setWide(event.matches);
+    }
+    media.addEventListener('change', resize);
+    return () => media.removeEventListener('change', resize);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!restoreFocus.current) return;
+    restoreFocus.current = false;
+    navigation.current?.querySelector<HTMLElement>('select, [role="tab"][aria-selected="true"]')?.focus({ preventScroll: true });
+  }, [wide]);
+
+  return (
+    <>
+      <div ref={navigation}>
+        {wide ? (
+          <Tabs id={navigationId} label="Repository views" tabs={tabs} activeTab={active} onChange={onChange} />
+        ) : (
+          <label className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-divider pb-2 text-control text-fg-secondary">
+            <span>Repository view</span>
+            <select
+              className="control-target control-focus min-w-0 max-w-full cursor-pointer rounded-lg border border-control-border bg-panel-inset px-2.5 py-1.5 text-control text-fg hover:border-link"
+              value={active}
+              aria-controls={`${navigationId}-panel-${active}`}
+              onChange={event => onChange(event.target.value)}
+            >
+              {tabs.map(tab => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
+            </select>
+          </label>
+        )}
+      </div>
+      {tabs.map(tab => (wide || tab.id === active) && (
+        <section
+          key={tab.id}
+          id={`${navigationId}-panel-${tab.id}`}
+          role={wide ? 'tabpanel' : undefined}
+          aria-labelledby={wide ? `${navigationId}-tab-${tab.id}` : undefined}
+          aria-label={wide ? undefined : tab.label}
+          hidden={tab.id !== active}
+          tabIndex={wide && tab.id === active ? 0 : undefined}
+          className="control-focus min-w-0 rounded-sm"
+        >
+          {tab.id === active && children}
+        </section>
+      ))}
+    </>
+  );
+}
 
 export function RepoDashboardPage() {
-  const { owner = '', repo = '' } = useParams(); const [params, setParams] = useSearchParams();
-  const { user } = useAuth(); const { selected } = useInstallation();
+  const { owner = '', repo = '' } = useParams();
+  const [params, setParams] = useSearchParams();
+  const { user } = useAuth();
+  const { selected } = useInstallation();
   const full = `${owner}/${repo}`;
-  const active = tabs.some(t => t.id === params.get('tab')) ? params.get('tab')! : 'pulls';
+  const requestedTab = params.get('tab');
+  const active = tabs.find(tab => tab.id === requestedTab)?.id ?? 'pulls';
+  const installationId = params.get('installation_id') ?? selected?.id.toString();
+  const repositoriesTo = installationId === undefined ? '/repos' : `/repos?${new URLSearchParams({ installation_id: installationId })}`;
+
   useEffect(() => {
-    if ((params.has('tab') && params.get('tab') !== active) || (selected && !params.has('installation_id'))) setParams(previous => { const next = new URLSearchParams(previous); next.set('tab', active); if (selected) next.set('installation_id', String(selected.id)); return next; }, { replace: true });
-  }, [active, selected, params, setParams]);
+    if (requestedTab === 'settings') return;
+    if ((requestedTab !== null && requestedTab !== active) || (selected && !params.has('installation_id'))) {
+      setParams(previous => {
+        const next = new URLSearchParams(previous);
+        next.set('tab', active);
+        if (selected) next.set('installation_id', String(selected.id));
+        return next;
+      }, { replace: true });
+    }
+  }, [active, requestedTab, selected, params, setParams]);
+
   const state = useResource(user && selected && !selected.suspended ? `u:${user.id}:i:${selected.id}:repos` : null, s => endpoints.repos(selected!.id, s));
   const repository = state.data?.find(r => r.full_name.toLowerCase() === full.toLowerCase());
   const scope = `u:${user?.id}:i:${selected?.id}:repo:${full}`;
+  const legacySettings = requestedTab === 'settings';
+  const bookmarkScope = legacySettings && user && selected && !selected.suspended ? scope : null;
+  const [checkedBookmark, setCheckedBookmark] = useState<string | null>(null);
+  const refreshAccess = state.refresh;
+
+  useEffect(() => {
+    // A saved bookmark must recheck access even after a recent visit to this repository.
+    // The resource coalesces this refresh with an ordinary in-flight repository read.
+    if (bookmarkScope) refreshAccess();
+    setCheckedBookmark(bookmarkScope);
+  }, [bookmarkScope, refreshAccess]);
+
+  function changeTab(tab: string) {
+    if (active === tab) return;
+    setParams(previous => {
+      const next = new URLSearchParams(previous);
+      next.set('tab', tab);
+      return next;
+    });
+  }
+
+  if (bookmarkScope && checkedBookmark === bookmarkScope && selected && repository && !state.loading && !state.error) {
+    return <Navigate replace to={installationSettingsUrl(selected.id, params)} />;
+  }
+
   return (
-    <div className="space-y-6">
-      <div className="bg-neutral-900/60 border border-neutral-800/80 rounded-xl p-4 sm:p-5">
-        <InstallationPicker />
-      </div>
+    <div className="space-y-2 sm:space-y-4">
+      <ContextBar repositoriesTo={repositoriesTo} repository={repository} />
 
       {selected && !selected.suspended && (
-        <div className="space-y-5">
-          <AsyncState {...state} hasData={!!state.data} />
+        <AsyncState {...state} hasData={!!state.data} updatedAt={state.error ? state.updatedAt : undefined} />
+      )}
 
-          {state.data && !repository && (
-            <div className="p-4 rounded-xl bg-severity-medium-bg border border-severity-medium-border text-sm text-severity-medium font-medium">
-              <p role="alert">Repository not found or access unavailable for this installation.</p>
-            </div>
-          )}
+      {state.data && !repository && (
+        <p role="alert" className="rounded-lg border border-risk-medium/35 bg-risk-medium-bg p-3 text-support text-risk-medium">
+          Repository not found or access unavailable for this installation.
+        </p>
+      )}
 
-          {repository && user && (
-            <div className="space-y-6">
-              <ContextBar
-                owner={owner}
-                repo={repo}
-                installationId={selected.id}
-                defaultBranch={repository.default_branch}
-                reviewMode={selected.review_mode}
-              />
-
-              <div className="flex flex-col lg:flex-row gap-6 items-start">
-                {/* Repository Contextual Navigation Sidebar (Desktop) / Header (Mobile) */}
-                <aside className="w-full lg:w-64 shrink-0 space-y-4">
-                  {/* Repository Identity Card */}
-                  <div className="rounded-xl border border-neutral-800/90 bg-neutral-900/80 p-4 space-y-3">
-                    <div className="flex items-center gap-2 text-neutral-400 text-xs font-mono">
-                      <FolderGit2 className="w-4 h-4 text-primary-400 shrink-0" />
-                      <span className="truncate">{owner}</span>
-                    </div>
-                    <h1 className="text-lg font-bold font-mono text-neutral-100 break-all leading-tight">
-                      {repo}
-                    </h1>
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-neutral-950 border border-neutral-800 text-[11px] font-mono text-neutral-300">
-                        <GitBranch className="w-3 h-3 text-neutral-400" />
-                        {repository.default_branch}
-                      </span>
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-neutral-950 border border-neutral-800 text-[11px] font-mono text-neutral-300">
-                        Mode: {selected.review_mode}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Contextual Navigation (Tabs in Responsive Sidebar Mode) */}
-                  <div className="rounded-xl border border-neutral-800/80 bg-neutral-900/40 p-2 lg:p-3">
-                    <div className="hidden lg:block px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider text-neutral-400">
-                      Repository Navigation
-                    </div>
-                    <Tabs
-                      id="repository-tabs"
-                      tabs={tabs}
-                      activeTab={active}
-                      variant="responsive"
-                      onChange={tab =>
-                        setParams(previous => {
-                          const next = new URLSearchParams(previous);
-                          next.set('tab', tab);
-                          return next;
-                        })
-                      }
-                    />
-                  </div>
-
-                  {/* Global Scope Shortcuts in Sidebar */}
-                  <div className="hidden lg:block rounded-xl border border-neutral-800/60 bg-neutral-950/40 p-3 space-y-1 text-xs">
-                    <div className="px-2 py-1 text-[11px] font-mono uppercase tracking-wider text-neutral-400">
-                      Global Scope
-                    </div>
-                    <Link
-                      to="/repos"
-                      className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/50 transition-colors"
-                    >
-                      <ArrowLeft className="w-3.5 h-3.5" />
-                      <span>All Repositories</span>
-                    </Link>
-                    <Link
-                      to="/profile"
-                      className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/50 transition-colors"
-                    >
-                      <Sliders className="w-3.5 h-3.5" />
-                      <span>Profile & Policies</span>
-                    </Link>
-                  </div>
-                </aside>
-
-                {/* Main Tab Panel Area */}
-                <div
-                  role="tabpanel"
-                  id={`repository-tabs-panel-${active}`}
-                  aria-labelledby={`repository-tabs-tab-${active}`}
-                  key={`${scope}:${active}`}
-                  className="flex-1 min-w-0 w-full"
-                >
-                  {active === 'pulls' && <PullsTab scope={scope} installation={selected.id} repo={full} />}
-                  {active === 'analytics' && <AnalyticsTab scope={scope} installation={selected.id} repo={full} />}
-                  {active === 'agents' && <AgentsTab scope={scope} installation={selected.id} repo={full} />}
-                  {active === 'settings' && <SettingsTab userId={user.id} installation={selected.id} />}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+      {!legacySettings && repository && selected && user && (
+        <RepositoryViews active={active} onChange={changeTab}>
+          <div key={scope}>
+            {active === 'pulls' && <PullsTab mode={selected.review_mode} scope={scope} installation={selected.id} repo={full} />}
+            {active === 'analytics' && <AnalyticsTab scope={scope} installation={selected.id} repo={full} />}
+            {active === 'agents' && <AgentsTab scope={scope} installation={selected.id} repo={full} />}
+          </div>
+        </RepositoryViews>
       )}
     </div>
   );

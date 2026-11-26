@@ -1,15 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App from '../App';
 import { clearResources } from '../api/resources';
-import { clearWriteStates } from '../api/writes';
+import { clearWriteStates, useWrite } from '../api/writes';
 import { backend, json, pull, review } from './fixtures';
 import { validateStandards } from '../components/dashboard/SettingsTab';
 beforeEach(() => sessionStorage.clear());
 afterEach(() => { cleanup(); clearResources(); clearWriteStates(); vi.unstubAllGlobals(); });
 const open = (path: string) => render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>);
 describe('real write contracts', () => {
+  it.each(['accepted', 'failed'])('ignores a late %s operation after a session change reuses the same key', async outcome => {
+    const hook = renderHook(() => useWrite('u:1:autofix:9'));
+    let acceptOld!: (value: number) => void, rejectOld!: (error: Error) => void, acceptCurrent!: (value: number) => void;
+    const obsolete = new Promise<number>((resolve, reject) => { acceptOld = resolve; rejectOld = reject; });
+    const current = new Promise<number>(resolve => { acceptCurrent = resolve; });
+    const previousRefresh = vi.fn(), refresh = vi.fn();
+    let oldResult!: Promise<number | undefined>;
+    act(() => {
+      oldResult = hook.result.current.run(() => obsolete, previousRefresh);
+      clearWriteStates();
+      void hook.result.current.run(() => current, refresh);
+    });
+    await act(async () => {
+      if (outcome === 'accepted') acceptOld(1); else rejectOld(new Error('Old session ended'));
+      expect(await oldResult).toBeUndefined();
+    });
+    expect(hook.result.current.busy).toBe(true);
+    expect(previousRefresh).not.toHaveBeenCalled();
+    await act(async () => { acceptCurrent(2); await current; });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.busy).toBe(false);
+  });
   it('rejects without claiming the branch was deleted', async () => {
     let current = review({ autofix_status: 'pending_approval', autofix: { ...review().autofix, status: 'pending_approval', branch: 'fix/review-9', applied_count: 1 } });
     const fetch = vi.fn((url: string, options: RequestInit) => {
@@ -43,17 +65,22 @@ describe('real write contracts', () => {
     vi.stubGlobal('fetch', fetch); open('/repos/owner/httpx?installation_id=7&tab=settings');
     const input = await screen.findByLabelText('Custom coding standards');
     fireEvent.change(input, { target: { files: [new File(['# Rules'], 'rules.md')] } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Upload standards' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Upload standards' }));
-    expect(await screen.findByText('Version: v2')).toBeInTheDocument();
+    await screen.findByText('Custom standards: rules.md');
+    fireEvent.click(screen.getByText('Technical details'));
+    expect(screen.getByText('Version: v2')).toBeVisible();
+    expect(screen.getByText('Uploaded custom standards · rules.md · version v2.')).toBeVisible();
     const post = fetch.mock.calls.find(([, o]) => o.method === 'POST')!; expect(post[1].body).toBeInstanceOf(FormData); expect(post[1].headers).toBeUndefined();
     fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' })); fireEvent.click(screen.getByRole('button', { name: 'Confirm reset' }));
     expect(await screen.findByText('Default standards')).toBeInTheDocument();
+    expect(screen.getByText('Reset confirmed. Default standards apply to subsequent reviews.')).toBeVisible();
   });
   it('triggers without a body and navigates using the numeric returned review ID', async () => {
     const fetch = vi.fn((url: string, options: RequestInit) => Promise.resolve(options.method === 'POST' ? json({ status: 'accepted', review_id: 12 }, 202) : url.endsWith('/reviews/12') ? json(review({ id: 12, status: 'pending', summary: 'Waiting for worker' })) : backend(url)));
     vi.stubGlobal('fetch', fetch); open('/repos/owner/httpx?installation_id=7');
-    fireEvent.click(await screen.findByRole('button', { name: 'Run a new review' }));
-    expect(await screen.findByText('Review #12 · owner/httpx PR #1')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Run Another Review for owner/httpx PR #1' }));
+    expect(await screen.findByRole('heading', { name: 'Review #12 · owner/httpx PR #1' })).toBeInTheDocument();
     const posts = fetch.mock.calls.filter(([, o]) => o.method === 'POST');
     expect(posts).toHaveLength(1); expect(posts[0][0]).toContain('/pulls/1/review'); expect(posts[0][1].body).toBeUndefined();
   });
@@ -98,8 +125,8 @@ describe('real write contracts', () => {
     });
     vi.stubGlobal('fetch', fetch); open('/profile');
     fireEvent.change(await screen.findByLabelText('Review mode'), { target: { value: 'auto' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply to all administered installations' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Apply to all administered installations' })).toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Apply to 1 installation' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Apply to 1 installation' })).toBeDisabled());
     expect(fetch.mock.calls.filter(([, o]) => o.method === 'PATCH')[0][1].body).toBe('{"review_mode":"auto","version":"manual"}');
   });
   it('validates standards extension, byte limit, and UTF-8', async () => {

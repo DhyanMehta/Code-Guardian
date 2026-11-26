@@ -1,0 +1,20 @@
+{
+  "before": {
+    "viewport": 1422,
+    "client": 1422,
+    "scroll": 1422,
+    "dpr": 1,
+    "headings": [
+      "Profile settings"
+    ]
+  },
+  "after": {
+    "viewport": 711,
+    "client": 711,
+    "scroll": 711,
+    "dpr": 2,
+    "headings": [
+      "Profile settings"
+    ]
+  }
+}

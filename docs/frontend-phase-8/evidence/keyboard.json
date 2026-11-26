@@ -1,0 +1,17 @@
+{
+  "skip": "main-content",
+  "desktop": {
+    "current": "true",
+    "focus": "Analytics"
+  },
+  "resized": {
+    "focus": "SELECT",
+    "value": "analytics"
+  },
+  "chooser": "Pull Requests\nAnalytics\nAgent History",
+  "section": {
+    "focus": "execution",
+    "region": "Execution details"
+  },
+  "time": "2026-11-22T14:28:32.797Z"
+}

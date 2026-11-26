@@ -13,6 +13,7 @@ export interface TabsProps {
   onChange: (tabId: string) => void;
   className?: string;
   id?: string;
+  label?: string;
   variant?: 'tabs' | 'sidebar' | 'responsive';
 }
 
@@ -22,6 +23,7 @@ export const Tabs: React.FC<TabsProps> = ({
   onChange,
   className = '',
   id,
+  label = 'Sub-navigation tabs',
   variant = 'tabs',
 }) => {
   const generated = useId();
@@ -33,13 +35,13 @@ export const Tabs: React.FC<TabsProps> = ({
     ? `flex flex-col gap-1 w-full ${className}`
     : isResponsive
     ? `flex flex-row lg:flex-col items-center lg:items-stretch gap-1 lg:gap-1.5 overflow-x-auto lg:overflow-x-visible border-b lg:border-b-0 border-neutral-800 w-full ${className}`
-    : `flex items-center gap-1 border-b border-neutral-800 overflow-x-auto ${className}`;
+    : `flex flex-wrap items-center gap-x-1 gap-y-2 border-b border-divider pb-2 ${className}`;
 
   return (
     <div
       id={scope}
       role="tablist"
-      aria-label="Sub-navigation tabs"
+      aria-label={label}
       aria-orientation={isSidebar ? 'vertical' : undefined}
       className={containerClasses}
     >
@@ -57,10 +59,10 @@ export const Tabs: React.FC<TabsProps> = ({
                 ? 'text-primary-400 font-semibold lg:bg-neutral-900 lg:border lg:border-primary-500/30 lg:shadow-xs'
                 : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/40 border border-transparent'
             }`
-          : `flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors duration-150 relative cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 ${
+          : `control-target control-focus relative flex cursor-pointer items-center gap-2 rounded-lg px-3 py-1.5 text-control md:text-control-wide transition-colors ${
               isActive
-                ? 'text-primary-400 font-semibold'
-                : 'text-neutral-400 hover:text-neutral-200'
+                ? 'bg-panel-raised text-link'
+                : 'text-fg-secondary hover:bg-panel hover:text-fg'
             }`;
 
         return (
@@ -73,9 +75,9 @@ export const Tabs: React.FC<TabsProps> = ({
             tabIndex={isActive ? 0 : -1}
             onKeyDown={event => {
               const next =
-                event.key === 'ArrowRight' || event.key === 'ArrowDown'
+                event.key === 'ArrowRight' || ((isSidebar || isResponsive) && event.key === 'ArrowDown')
                   ? (index + 1) % tabs.length
-                  : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+                  : event.key === 'ArrowLeft' || ((isSidebar || isResponsive) && event.key === 'ArrowUp')
                   ? (index + tabs.length - 1) % tabs.length
                   : event.key === 'Home'
                   ? 0
@@ -93,7 +95,7 @@ export const Tabs: React.FC<TabsProps> = ({
           >
             <div className="flex items-center gap-2.5">
               {tab.icon && (
-                <span className={isActive ? 'text-primary-400' : 'text-neutral-400'}>
+                <span aria-hidden="true" className={isActive || !(isSidebar || isResponsive) ? undefined : 'text-neutral-400'}>
                   {tab.icon}
                 </span>
               )}
@@ -112,7 +114,7 @@ export const Tabs: React.FC<TabsProps> = ({
               </span>
             )}
 
-            {isActive && !isSidebar && (
+            {isActive && isResponsive && (
               <div
                 className={`absolute bottom-0 left-0 right-0 h-0.5 bg-primary-500 ${isResponsive ? 'lg:hidden' : ''}`}
                 aria-hidden="true"

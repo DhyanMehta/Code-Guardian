@@ -1,0 +1,242 @@
+{
+  "result": {
+    "firefox": {
+      "version": "153.0",
+      "screens": {
+        "PR": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "owner/httpx"
+          ]
+        },
+        "review": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "Review #9 · owner/httpx PR #1"
+          ]
+        },
+        "analytics": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "owner/httpx"
+          ]
+        },
+        "history": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "owner/httpx"
+          ]
+        },
+        "settings": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "Installation Settings"
+          ]
+        },
+        "profile": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "Profile settings"
+          ]
+        }
+      },
+      "initialDialogFocus": "Cancel",
+      "restored": "Reset to defaults"
+    },
+    "webkit": {
+      "version": "26.4",
+      "screens": {
+        "PR": {
+          "viewport": 320,
+          "client": 314,
+          "scroll": 314,
+          "dpr": 1,
+          "headings": [
+            "owner/httpx"
+          ]
+        },
+        "review": {
+          "viewport": 320,
+          "client": 314,
+          "scroll": 314,
+          "dpr": 1,
+          "headings": [
+            "Review #9 · owner/httpx PR #1"
+          ]
+        },
+        "analytics": {
+          "viewport": 320,
+          "client": 314,
+          "scroll": 314,
+          "dpr": 1,
+          "headings": [
+            "owner/httpx"
+          ]
+        },
+        "history": {
+          "viewport": 320,
+          "client": 314,
+          "scroll": 314,
+          "dpr": 1,
+          "headings": [
+            "owner/httpx"
+          ]
+        },
+        "settings": {
+          "viewport": 320,
+          "client": 314,
+          "scroll": 314,
+          "dpr": 1,
+          "headings": [
+            "Installation Settings"
+          ]
+        },
+        "profile": {
+          "viewport": 320,
+          "client": 314,
+          "scroll": 314,
+          "dpr": 1,
+          "headings": [
+            "Profile settings"
+          ]
+        }
+      },
+      "initialDialogFocus": "Cancel",
+      "restored": "Reset to defaults"
+    },
+    "chromium": {
+      "version": "151.0.7922.34",
+      "screens": {
+        "PR": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "owner/httpx"
+          ]
+        },
+        "review": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "Review #9 · owner/httpx PR #1"
+          ]
+        },
+        "analytics": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "owner/httpx"
+          ]
+        },
+        "history": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "owner/httpx"
+          ]
+        },
+        "settings": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "Installation Settings"
+          ]
+        },
+        "profile": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "Profile settings"
+          ]
+        }
+      },
+      "initialDialogFocus": "Cancel",
+      "restored": "Reset to defaults",
+      "edgeStates": {
+        "empty": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "Connected Repositories"
+          ],
+          "visible": "Connected Repositories\n\nRepositories connected through your GitHub App.\n\nUpdate GitHub App access\nInstallation\nSelect installation\nowner\n\nReview mode\nManual\n\nInstallation Settings\n"
+        },
+        "access-loss": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "Connected Repositories"
+          ],
+          "visible": "Connected Repositories\n\nRepositories connected through your GitHub App.\n\nUpdate GitHub App access\nInstallation\nSelect installation\nowner\n\nReview mode\nManual\n\nInstallation Settings\n"
+        },
+        "long-repository": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "owner/repositoryrepositoryrepositoryrepositoryrepositoryrepositoryrepositoryrepositoryrepositoryrepository"
+          ],
+          "visible": "All repositories\nInstallation\nSelect installation\nowner\n\nReview mode\nManual\n\nInstallation Settings\nowner/repositoryrepositoryrepositoryrepositoryrepositoryrepositoryrepositoryrepos"
+        },
+        "long-code": {
+          "viewport": 320,
+          "client": 320,
+          "scroll": 320,
+          "dpr": 1,
+          "headings": [
+            "Review #9 · owner/httpx PR #1"
+          ],
+          "visible": "← Pull requests\nReview #9\n·\nowner/httpx PR #1\n\nAnalysis\nCompleted\n\nRevision head-1\nMatches current PR head\n1 finding reported\nCritical\n0\nHigh\n0\nMedium\n0\nLow\n0\nInfo\n0\nUnknown\n0\nExec",
+          "code": {
+            "client": 262,
+            "scroll": 8449
+          }
+        }
+      },
+      "emulated": {
+        "focus": "CodeGuardian AI",
+        "forced": true,
+        "motion": true,
+        "transition": "1e-05s",
+        "outline": "solid",
+        "outlineWidth": "3px"
+      }
+    }
+  },
+  "errors": []
+}

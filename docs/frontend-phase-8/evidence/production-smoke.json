@@ -1,0 +1,37 @@
+{
+  "environment": "Isolated Chromium, unmodified dist files served by Playwright request interception",
+  "assets": {
+    "index.html": {
+      "status": 200,
+      "type": "text/html",
+      "bytes": 786
+    },
+    "assets/index-Dil2Pf4P.css": {
+      "status": 200,
+      "type": "text/css",
+      "bytes": 59492
+    },
+    "assets/index-D6pBO_hr.js": {
+      "status": 200,
+      "type": "text/javascript",
+      "bytes": 438260
+    },
+    "assets/plus-jakarta-sans-latin-wght-normal-eXO_dkmS.woff2": {
+      "status": 200,
+      "type": "font/woff2",
+      "bytes": 27348
+    },
+    "shield.svg": {
+      "status": 200,
+      "type": "image/svg+xml",
+      "bytes": 197
+    }
+  },
+  "pages": {
+    "landing": "Code review for GitHub pull requests",
+    "repositories": "Connected Repositories"
+  },
+  "unexpected": [],
+  "console": [],
+  "favicon": true
+}

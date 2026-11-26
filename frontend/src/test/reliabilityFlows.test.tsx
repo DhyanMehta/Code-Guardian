@@ -20,7 +20,7 @@ describe('complete reliability flows', () => {
     expect(fetch.mock.calls.some(([url]) => /\/installations\/\d+\/repos$/.test(url))).toBe(false);
     fireEvent.change(selector, { target: { value: '8' } });
     expect(await screen.findByText('another/httpx')).toBeInTheDocument();
-    expect(screen.getByText('View pull requests →')).toHaveAttribute('href', '/repos/another/httpx?installation_id=8');
+    expect(screen.getByRole('link', { name: 'View pull requests for another/httpx' })).toHaveAttribute('href', '/repos/another/httpx?installation_id=8');
   });
   it('does not use saved selection to override an invalid explicit installation', async () => {
     sessionStorage.setItem('codeguardian:installation:1', '7'); open('/repos?installation_id=999');
@@ -37,12 +37,12 @@ describe('complete reliability flows', () => {
   });
   it('resolves a legacy PR route to its review ID', async () => {
     open('/repos/owner/httpx/pulls/1?installation_id=7');
-    expect(await screen.findByText('Review #9 · owner/httpx PR #1')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Review #9 · owner/httpx PR #1' })).toBeInTheDocument();
   });
   it('handles skipped and failed records without inventing a clean review', async () => {
     vi.stubGlobal('fetch', vi.fn((url: string) => Promise.resolve(url.endsWith('/reviews/9') ? json(review({ status: 'skipped', summary: 'Superseded by a newer review.' })) : backend(url))));
     open('/reviews/9'); await screen.findByText('Superseded by a newer review.');
-    expect(screen.getByText('Analysis: Skipped')).toBeInTheDocument();
+    expect(screen.getByText('Skipped').closest('p')).toHaveTextContent(/Analysis\s+Skipped/);
     expect(screen.queryByText('Saved / rendered report')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create fix branch' })).toBeDisabled();
   });
@@ -50,7 +50,7 @@ describe('complete reliability flows', () => {
     const fetch = vi.fn((url: string) => Promise.resolve(url.endsWith('/reviews/9') ? json({ detail: 'Expired' }, 401) : backend(url)));
     vi.stubGlobal('fetch', fetch); open('/reviews/9');
     expect(await screen.findByText('Session expired. Sign in again.')).toBeInTheDocument();
-    expect(screen.queryByText('Review #9 · owner/httpx PR #1')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Review #9 · owner/httpx PR #1' })).not.toBeInTheDocument();
   });
   it('shows repository access loss instead of a fabricated fallback', async () => {
     vi.stubGlobal('fetch', vi.fn((url: string) => Promise.resolve(url.endsWith('/installations/7/repos') ? json([]) : backend(url))));
@@ -90,9 +90,11 @@ describe('complete reliability flows', () => {
   });
   it('normalizes an invalid tab while retaining installation and unrelated parameters', async () => {
     open('/repos/owner/httpx?installation_id=7&tab=invalid&keep=yes');
-    await screen.findByText('Review #9 · Completed');
+    await screen.findByRole('link', { name: 'View Review #9 for owner/httpx PR #1' });
     expect(screen.getByRole('tab', { name: 'Pull Requests' })).toHaveAttribute('aria-selected', 'true');
-    fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
-    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'repository-tabs-tab-settings'));
+    fireEvent.click(screen.getByRole('tab', { name: 'Analytics' }));
+    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'repository-tabs-tab-analytics'));
+    fireEvent.click(screen.getByRole('link', { name: 'Installation Settings' }));
+    expect(await screen.findByText('Default standards')).toBeVisible();
   });
 });

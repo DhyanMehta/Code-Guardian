@@ -1,84 +1,89 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { agents, severities, type Finding } from '../../api/contracts';
-import { FindingCard, agentLabels } from './ReviewPresentation';
-export function FindingsList({ findings, reviewId }: { findings: Finding[]; reviewId: number }) {
-  const [agent, setAgent] = useState('all'),
-    [severity, setSeverity] = useState('all'),
-    [query, setQuery] = useState('');
-  const selected = findings.filter(
-    f =>
-      (agent === 'all' || f.agent === agent) &&
-      (severity === 'all' || f.severity === severity) &&
-      `${f.title} ${f.file_path ?? ''} ${f.detail ?? ''}`.toLowerCase().includes(query.toLowerCase())
-  );
-  if (!findings.length) return null;
+import { Button } from '../common/Button';
+import { SearchInput } from '../common/SearchInput';
+import { FindingCard, evidenceText } from './FindingCard';
+import { agentLabels } from './ReviewPresentation';
+
+const emptyFilters = { severity: 'all', agent: 'all', query: '' };
+const selectClass = 'control-focus control-target w-full min-w-0 rounded-lg border border-control-border bg-panel-inset px-2 text-control text-fg';
+
+function fragment() {
+  return window.location.hash.match(/^#(finding-\d+)$/)?.[1] ?? null;
+}
+
+export function FindingsList({ findings, reviewId, total, standardsVersion }: {
+  findings: Finding[]; reviewId: number; total: number; standardsVersion: string | null;
+}) {
+  const [filters, setFilters] = useState(emptyFilters);
+  const [target, setTarget] = useState(fragment);
+  const [notice, setNotice] = useState('');
+  const search = useRef<HTMLInputElement>(null);
+  const filtered = filters.severity !== 'all' || filters.agent !== 'all' || !!filters.query;
+  const term = filters.query.trim().toLowerCase();
+  const selected = findings.filter(f => {
+    if (filters.severity !== 'all' && f.severity !== filters.severity) return false;
+    if (filters.agent !== 'all' && f.agent !== filters.agent) return false;
+    if (!term) return true;
+    return [f.title, f.file_path, f.detail, f.line, agentLabels[f.agent], f.severity,
+      ...['kind', 'symbol', 'source_file', 'cited_passage', 'standards_version'].map(key => evidenceText(f, key))]
+      .join(' ').toLowerCase().includes(term);
+  });
+
+  useEffect(() => {
+    const changed = () => { setTarget(fragment()); setNotice(''); };
+    window.addEventListener('hashchange', changed);
+    return () => window.removeEventListener('hashchange', changed);
+  }, []);
+  useEffect(() => {
+    if (!target || !findings.some(f => `finding-${f.id}` === target)) return;
+    const card = document.getElementById(target);
+    if (card instanceof HTMLDetailsElement) {
+      card.open = true;
+      card.querySelector('summary')?.focus({ preventScroll: true });
+      card.scrollIntoView?.({ block: 'start' });
+      setTarget(null);
+    } else if (filtered) {
+      setFilters(emptyFilters);
+      setNotice('Filters cleared to show the linked finding.');
+    }
+  }, [target, findings, filtered]);
+
+  function change(key: keyof typeof emptyFilters, value: string) {
+    setNotice('');
+    setFilters(previous => ({ ...previous, [key]: value }));
+  }
+  if (!findings.length) return <p className="text-support text-fg-secondary">{total
+    ? `This review reports ${total} findings. Individual finding records are unavailable.`
+    : 'No findings reported. Check agent coverage before interpreting this result.'}</p>;
 
   return (
-    <section className="space-y-4">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 p-4 rounded-xl bg-neutral-900/60 border border-neutral-800/80">
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-2 text-xs font-mono text-neutral-300">
-            <span>Agent</span>
-            <select
-              aria-label="Filter findings by agent"
-              className="bg-neutral-900 border border-neutral-700/80 hover:border-neutral-600 rounded-lg py-1.5 px-3 text-xs text-neutral-100 font-sans focus:outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-400 cursor-pointer"
-              value={agent}
-              onChange={e => setAgent(e.target.value)}
-            >
-              <option value="all">All agents</option>
-              {agents.map(a => (
-                <option key={a} value={a}>
-                  {agentLabels[a]}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="flex items-center gap-2 text-xs font-mono text-neutral-300">
-            <span>Severity</span>
-            <select
-              aria-label="Filter findings by severity"
-              className="bg-neutral-900 border border-neutral-700/80 hover:border-neutral-600 rounded-lg py-1.5 px-3 text-xs text-neutral-100 font-sans focus:outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-400 cursor-pointer capitalize"
-              value={severity}
-              onChange={e => setSeverity(e.target.value)}
-            >
-              <option value="all">All severities</option>
-              {severities.map(s => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        <div className="w-full md:w-64">
-          <input
-            className="w-full bg-neutral-900 border border-neutral-700/80 hover:border-neutral-600 rounded-lg py-1.5 px-3 text-xs text-neutral-100 placeholder:text-neutral-400 font-sans focus:outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-400"
-            type="search"
-            aria-label="Search findings"
-            placeholder="Search findings or files…"
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-          />
+    <div className="space-y-2">
+      <div role="group" aria-label="Finding filters" className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-[minmax(7rem,0.7fr)_minmax(8rem,0.8fr)_minmax(12rem,2fr)]">
+        <label className="min-w-0 text-meta text-fg-secondary">Severity
+          <select className={selectClass} aria-label="Filter findings by severity" value={filters.severity} onChange={e => change('severity', e.target.value)}>
+            <option value="all">All severities</option>
+            {severities.map(s => <option key={s} value={s}>{s[0].toUpperCase() + s.slice(1)}</option>)}
+          </select>
+        </label>
+        <label className="min-w-0 text-meta text-fg-secondary">Agent
+          <select className={selectClass} aria-label="Filter findings by agent" value={filters.agent} onChange={e => change('agent', e.target.value)}>
+            <option value="all">All agents</option>
+            {agents.map(a => <option key={a} value={a}>{agentLabels[a]}</option>)}
+          </select>
+        </label>
+        <div className="col-span-2 min-w-0 sm:col-span-1">
+          <label htmlFor={`search-findings-${reviewId}`} className="text-meta text-fg-secondary">Search findings</label>
+          <SearchInput id={`search-findings-${reviewId}`} ref={search} aria-label="Search findings" placeholder="Title, file, or evidence" value={filters.query} onChange={e => change('query', e.target.value)} />
         </div>
       </div>
-
-      <div className="flex items-center justify-between text-xs font-mono text-neutral-400 px-1">
-        <p className="text-sm text-neutral-400">Showing {selected.length} of {findings.length} findings</p>
+      <div className="flex min-h-8 flex-wrap items-center justify-between gap-x-3 text-meta text-fg-muted">
+        <p role="status">Showing {selected.length} of {total} findings{notice && <span className="block">{notice}</span>}</p>
+        {filtered && <Button variant="quiet" size="sm" onClick={() => { setFilters(emptyFilters); setNotice(''); search.current?.focus(); }}>Clear filters</Button>}
       </div>
-
-      {!selected.length && !!findings.length && (
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-8 text-center text-neutral-400">
-          <p>No findings match these filters.</p>
-        </div>
-      )}
-
-      <div className="space-y-3">
-        {selected.map(f => (
-          <FindingCard key={`${reviewId}:${f.id}`} finding={f} initiallyOpen={selected.length <= 5} />
-        ))}
-      </div>
-    </section>
+      {total !== findings.length && <p className="text-support text-status-degraded">{findings.length} individual records available for this review.</p>}
+      {!selected.length && <p className="rounded-lg border border-divider p-4 text-support">No findings match these filters.</p>}
+      {selected.map(f => <FindingCard key={`${reviewId}:${f.id}`} finding={f} initiallyOpen={selected.length <= 5} standardsVersion={standardsVersion} />)}
+    </div>
   );
 }

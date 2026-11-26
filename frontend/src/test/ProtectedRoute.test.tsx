@@ -31,6 +31,7 @@ describe('ProtectedRoute component', () => {
       </AuthProvider>
     );
 
+    expect(screen.getByRole('status')).toHaveTextContent('Checking your sign-in…');
     expect(await screen.findByText('Public Home')).toBeInTheDocument();
     expect(screen.queryByText('Protected Content Visible')).not.toBeInTheDocument();
   });

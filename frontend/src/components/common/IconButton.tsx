@@ -1,6 +1,6 @@
 import React, { ButtonHTMLAttributes, ReactNode } from 'react';
 
-export type IconButtonVariant = 'solid-neutral' | 'solid-primary' | 'solid-danger';
+export type IconButtonVariant = 'solid-neutral' | 'solid-primary' | 'solid-danger' | 'quiet';
 export type IconButtonSize = 'sm' | 'md' | 'lg';
 
 export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -11,15 +11,16 @@ export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement>
 }
 
 const variantStyles: Record<IconButtonVariant, string> = {
-  'solid-neutral': 'bg-neutral-800 hover:bg-neutral-700 active:bg-neutral-850 text-neutral-200 border border-neutral-700/80',
-  'solid-primary': 'bg-primary-500 hover:bg-primary-600 active:bg-primary-700 text-neutral-white border border-primary-600',
-  'solid-danger': 'bg-severity-critical-bg hover:bg-severity-critical-border text-severity-critical-text border border-severity-critical-border',
+  'solid-neutral': 'bg-action-secondary enabled:hover:bg-action-secondary-hover text-fg border-control-border',
+  'solid-primary': 'bg-action enabled:hover:bg-action-hover text-action-foreground border-action',
+  'solid-danger': 'bg-action-danger enabled:hover:bg-action-danger-hover text-risk-critical border-risk-critical/70',
+  quiet: 'bg-transparent enabled:hover:bg-action-secondary-hover text-fg-secondary border-transparent',
 };
 
 const sizeStyles: Record<IconButtonSize, string> = {
-  sm: 'w-7 h-7 text-xs rounded-md',
-  md: 'w-8 h-8 text-sm rounded-md',
-  lg: 'w-9 h-9 text-base rounded-md',
+  sm: 'size-10 [&_svg]:size-4',
+  md: 'size-11 [&_svg]:size-5',
+  lg: 'size-12 [&_svg]:size-6',
 };
 
 export const IconButton: React.FC<IconButtonProps> = ({
@@ -37,10 +38,10 @@ export const IconButton: React.FC<IconButtonProps> = ({
       type={type}
       aria-label={ariaLabel}
       disabled={disabled}
-      className={`inline-flex items-center justify-center shrink-0 transition-all duration-150 motion-safe:active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas cursor-pointer shadow-xs disabled:opacity-50 disabled:cursor-not-allowed ${variantStyles[variant]} ${sizeStyles[size]} ${className}`}
+      className={`control-target control-focus inline-flex items-center justify-center shrink-0 rounded-lg border transition-colors duration-100 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${variantStyles[variant]} ${sizeStyles[size]} ${className}`}
       {...props}
     >
-      {icon}
+      <span className="inline-flex" aria-hidden="true">{icon}</span>
     </button>
   );
 };

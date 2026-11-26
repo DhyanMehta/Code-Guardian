@@ -5,8 +5,7 @@ requests using a Supervisor Agent (LangGraph) that coordinates four specialist a
 Security, Quality, Test-Gap, and Documentation — then posts one severity-ranked report
 as a PR comment and can open an auto-fix branch that requires explicit human approval.
 
-See [`CONTEXT.md`](CONTEXT.md) for architecture, [`RULES.md`](RULES.md) for the binding
-engineering rules, and [`ENDPOINTS.md`](ENDPOINTS.md) for the API contract.
+See [`AGENTS.md`](AGENTS.md) for the complete setup and operations guide, [`CONTEXT.md`](CONTEXT.md) for architecture, [`RULES.md`](RULES.md) for the binding engineering rules, and [`ENDPOINTS.md`](ENDPOINTS.md) for the API contract.
 
 ## How it works
 
@@ -32,10 +31,10 @@ only triages, explains, and prioritizes — it never originates a finding.
 
 ## Prerequisites
 - Python 3.11+
-- Node.js 18+ (for the frontend dashboard)
-- Docker + Docker Compose (for the full local stack)
+- Node.js 18+ and npm (for the frontend dashboard and JS/TS static AST parser)
+- PostgreSQL 16+ (or Docker + Docker Compose for the full local stack)
 - Git
-- Scanner binaries: Semgrep, Gitleaks (Bandit installs via pip)
+- Scanners: Semgrep and Bandit (installed via `backend/requirements.txt`), Gitleaks binary (or Docker fallback)
 
 ## Local setup
 
@@ -53,9 +52,15 @@ backend\venv\Scripts\Activate.ps1
 # Confirm the venv is active
 where python        # should resolve inside backend\venv
 
-# Install dependencies
+# Install dependencies and editable backend package
 python -m pip install --upgrade pip
 pip install -r backend/requirements.txt
+pip install -e . --no-deps
+
+# Install JS/TS static AST parser dependencies (for frontend-language PR reviews)
+Set-Location backend\tools\parser
+npm ci
+Set-Location ..\..\..
 
 # Install Gitleaks native binary
 # Download from https://github.com/gitleaks/gitleaks/releases
@@ -65,8 +70,8 @@ pip install -r backend/requirements.txt
 ### Frontend
 
 ```powershell
-cd frontend
-npm install
+Set-Location frontend
+npm ci
 ```
 
 ### Configure environment
@@ -158,11 +163,11 @@ pytest backend/tests
 $env:CODEGUARDIAN_TEST_POSTGRES="1"
 pytest backend/tests -o addopts= --tb=short
 
-# Installed scanners and read-only external integration diagnostics
-python -m scripts.verify_backend_runtime --github --llm
+# Installed scanners only (safe local diagnostic; add --github --llm only when authorized)
+python -m scripts.verify_backend_runtime
 
 # Frontend
-cd frontend && npm test
+Set-Location frontend; npm test
 ```
 
 ## Ingest coding standards (for the Quality Agent)

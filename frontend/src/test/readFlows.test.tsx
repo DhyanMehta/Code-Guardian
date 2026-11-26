@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App from '../App';
 import { clearResources } from '../api/resources';
@@ -24,18 +24,48 @@ describe('read-only application flows', () => {
     expect(screen.getByText('schema.json — Non-source artifact')).toBeInTheDocument();
     expect(screen.queryByText(/could not run/)).not.toBeInTheDocument();
     parsed.agent_runs[1].outcome = 'ok';
-    render(<AgentOutcomeChart reviews={[parsed]} unavailable={0} />);
+    render(<MemoryRouter><AgentOutcomeChart reviews={[parsed]} unavailable={0} total={1} /></MemoryRouter>);
     expect(screen.queryByText(/completed without limitations/)).not.toBeInTheDocument();
     expect(screen.getAllByText(/recorded with outcome OK/).length).toBe(4);
   });
   it('uses real installation/repository identity and opens canonical review detail', async () => {
     render(<MemoryRouter initialEntries={['/repos']}><App /></MemoryRouter>);
-    fireEvent.click(await screen.findByText('View pull requests →'));
-    fireEvent.click(await screen.findByText('Review #9 · Completed'));
-    expect(await screen.findByText('Review #9 · owner/httpx PR #1')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('link', { name: 'View pull requests for owner/httpx' }));
+    fireEvent.click(await screen.findByRole('link', { name: 'View Review #9 for owner/httpx PR #1' }));
+    expect(await screen.findByRole('heading', { name: 'Review #9 · owner/httpx PR #1' })).toBeInTheDocument();
     expect(screen.getAllByText('Coverage not recorded').length).toBeGreaterThan(0);
     expect(screen.getByText('GitHub temporarily unavailable')).toBeInTheDocument();
     expect(screen.getAllByText(/Not recorded/).length).toBeGreaterThan(0);
+    expect(vi.mocked(fetch).mock.calls.every(([, options]) => options?.method === 'GET')).toBe(true);
+  });
+  it('keeps repository navigation and refresh separate and provides a skip destination', async () => {
+    const fetch = vi.fn((url: string, _options?: RequestInit) => Promise.resolve(backend(url)));
+    vi.stubGlobal('fetch', fetch);
+    render(<MemoryRouter initialEntries={['/repos']}><App /></MemoryRouter>);
+
+    const main = screen.getByRole('main');
+    expect(screen.getByRole('link', { name: 'Skip to main content' })).toHaveAttribute('href', '#main-content');
+    expect(main).toHaveAttribute('id', 'main-content');
+    expect(main).toHaveAttribute('tabindex', '-1');
+    expect(screen.getByRole('contentinfo')).toHaveTextContent('CodeGuardian AI');
+    expect(screen.getByRole('contentinfo')).not.toHaveTextContent(/SOC ?2|OWASP ASVS/i);
+
+    const repository = await within(main).findByRole('link', { name: 'View pull requests for owner/httpx' });
+    expect(repository).toHaveAttribute('href', '/repos/owner/httpx?installation_id=7');
+    const access = within(main).getByRole('link', { name: 'Update GitHub App access' });
+    expect(access.getAttribute('href')).toMatch(/^https:\/\/github\.com\/apps\/[^/]+\/installations\/new$/);
+
+    const search = within(main).getByRole('searchbox', { name: 'Search repositories' });
+    fireEvent.change(search, { target: { value: 'HTTPX' } });
+    const refresh = within(main).getByRole('button', { name: 'Refresh repositories' });
+    const repositoryRequests = () => fetch.mock.calls.filter(([url]) => new URL(url).pathname === '/installations/7/repos');
+    expect(repositoryRequests()).toHaveLength(1);
+    fireEvent.click(refresh);
+    await waitFor(() => expect(repositoryRequests()).toHaveLength(2));
+    await waitFor(() => expect(refresh).not.toHaveAttribute('aria-busy', 'true'));
+    expect(search).toHaveValue('HTTPX');
+    expect(repository).toBeVisible();
+    expect(fetch.mock.calls.every(([, options]) => (options?.method ?? 'GET') === 'GET')).toBe(true);
   });
   it('shows analytics with a single point and both coverage limitations', async () => {
     render(<MemoryRouter initialEntries={['/repos/owner/httpx?installation_id=7&tab=analytics']}><App /></MemoryRouter>);

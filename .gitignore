@@ -45,3 +45,5 @@ testsprite_tests/tmp/config.json
 # Local verification harnesses, captures, credentials and generated reports.
 /scratch/
 /testsprite_tests/
+/frontend/acceptance-local.html
+/frontend/public/frame-control.html

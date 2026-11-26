@@ -1,64 +1,70 @@
-import { agents, type ReviewDetail } from '../../api/contracts';
+import type { ProgressEvent, ReviewDetail } from '../../api/contracts';
+import { statusLabel } from '../../api/identity';
+import { FriendlyTimestamp } from '../common/FriendlyTimestamp';
 import { agentLabels } from './ReviewPresentation';
-export function AgentTimeline({review}: {review: ReviewDetail}) {
-  const current = review.progress.filter(e=>e.attempt === review.attempt);
+
+const stageNames: Record<ProgressEvent['stage'], string> = {
+  checkout: 'Checkout', analysis: 'Analysis', agent: 'Agent checkpoint', aggregation: 'Aggregation',
+  provider_gate: 'Provider slot', provider_token: 'Token allowance', provider_cooldown: 'Provider cooldown',
+  provider_retry: 'Provider retry', provider_priority: 'Required analysis priority',
+};
+const waitLabels: Partial<Record<ProgressEvent['stage'], string>> = {
+  provider_gate: 'Waiting for a provider slot', provider_token: 'Waiting for token allowance',
+  provider_cooldown: 'Waiting for provider cooldown', provider_retry: 'Waiting to retry provider request',
+  provider_priority: 'Optional drafts waiting for required analysis',
+};
+
+export function AgentTimeline({ review }: { review: ReviewDetail }) {
+  const attempts = new Map<number, ProgressEvent[]>();
+  for (const event of review.progress) {
+    const events = attempts.get(event.attempt);
+    if (events) events.push(event);
+    else attempts.set(event.attempt, [event]);
+  }
   const active = review.status === 'pending' || review.status === 'running';
-  const stage = current.filter(e => e.agent === null).at(-1);
-  const waitLabels = {
-    provider_gate: 'Waiting for a provider slot',
-    provider_token: 'Waiting for token allowance',
-    provider_cooldown: 'Waiting for provider cooldown',
-    provider_retry: 'Waiting to retry provider request',
-    provider_priority: 'Optional drafts waiting for required analysis',
-  };
-  return (
-    <section className="rounded-xl border border-primary-500/30 bg-neutral-900/80 p-5 space-y-4 shadow-xs" aria-label="Review execution progress">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800/60">
-        <div className="flex items-center gap-3">
-          {active && <span aria-hidden="true" className="h-5 w-5 shrink-0 rounded-full border-2 border-primary-400 border-t-transparent motion-safe:animate-spin" />}
-          <h2 className="font-semibold text-base text-neutral-100">
-            {review.status === 'pending' ? review.attempt ? 'Waiting to retry interrupted review' : 'Waiting for a worker' : active ? 'Review in progress' : 'Execution history'}
-          </h2>
+  const attemptNumbers = [...new Set([...attempts.keys(), review.attempt])].sort((a, b) => b - a);
+  return <div className="space-y-3">
+    {review.heartbeat_at && <FriendlyTimestamp label="Last worker heartbeat" kind="event" value={review.heartbeat_at} />}
+    {attemptNumbers.map(attempt => {
+      const events = attempts.get(attempt) ?? [];
+      const current = attempt === review.attempt;
+      const running = current && review.status === 'running';
+      const latest = new Map<string, ProgressEvent>();
+      for (const event of events) {
+        if (!event.stage.startsWith('provider_')) latest.set(event.agent ?? event.stage, event);
+      }
+      const interruptions = [...latest.values()].filter(e => e.status === 'started' && !running);
+      const exceptions = events.filter(e => e.status === 'failed' || e.status === 'degraded');
+      const last = events.at(-1);
+      const waits = new Map<string, ProgressEvent>();
+      for (const event of events) waits.set(event.agent ?? 'review', event);
+      const waiting = running ? [...waits.values()].filter(event => event.status === 'started' && waitLabels[event.stage]) : [];
+      return <article key={attempt} aria-label={`Attempt ${attempt}`} className="min-w-0 rounded-lg border border-divider bg-panel px-4 py-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="text-row-title">{attempt > 0 ? `Attempt ${attempt}` : active ? 'Awaiting first recorded attempt' : 'No numbered attempt recorded'}</h3>
+          <span className="text-meta text-fg-muted">{events.length} recorded {events.length === 1 ? 'event' : 'events'}</span>
         </div>
-        <p className="text-xs font-mono text-neutral-400">
-          Attempt {review.attempt}{review.heartbeat_at && ` · Last worker heartbeat: ${new Date(review.heartbeat_at).toLocaleTimeString()}`}
-        </p>
-      </div>
-
-      {stage && (
-        <p className="capitalize text-sm font-mono text-neutral-300">
-          {stage.stage}: {stage.status === 'started' ? review.status === 'running' ? 'in progress' : 'interrupted / not recorded complete' : stage.status}
-        </p>
-      )}
-
-      {!current.length && (
-        <p className="text-sm text-neutral-400">
-          {active ? 'Execution events will appear when the worker starts.' : 'Live progress was not recorded for this historical review.'}
-        </p>
-      )}
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        {agents.map(agent => {
-          const event = current.filter(e => e.agent === agent && e.stage === 'agent').at(-1);
-          const latest = current.filter(e => e.agent === agent).at(-1);
-          const wait = review.status === 'running' && latest?.status === 'started' && latest.stage in waitLabels
-            ? waitLabels[latest.stage as keyof typeof waitLabels] : null;
-          const label = event?.status === 'started' ? review.status === 'running' ? 'Running' : 'Interrupted' : event?.status === 'ok' ? 'Completed' : event?.status === 'degraded' ? 'Completed with limitations' : event?.status === 'failed' ? 'Failed' : active ? 'Waiting' : 'Not recorded';
-          return (
-            <div key={agent} className="rounded-lg border border-neutral-700/80 bg-neutral-950/60 p-3.5 space-y-1">
-              <p className="font-medium text-sm text-neutral-200">{agentLabels[agent]}</p>
-              <p className={`text-xs font-mono ${event?.status === 'ok' ? 'text-tertiary-400 font-semibold' : 'text-neutral-300'}`}>
-                {wait ?? label}
-              </p>
-              {event && <p className="text-[11px] font-mono text-neutral-500">{new Date(event.created_at).toLocaleTimeString()}</p>}
-            </div>
-          );
-        })}
-      </div>
-
-      <p className="text-xs text-neutral-400 leading-relaxed">
-        These are recorded execution events. Running agents may be waiting for shared provider capacity; final coverage and findings appear after aggregation.
-      </p>
-    </section>
-  );
+        {waiting.map(event => <p key={event.id} className="mt-2 text-support text-status-active">{event.agent && agentLabels[event.agent] + ' · '}<span>{waitLabels[event.stage]}</span></p>)}
+        {current && running && last && !waiting.includes(last) && <p className="mt-2 text-support">Latest checkpoint · {last.agent ? agentLabels[last.agent] + ' · ' : ''}{stageNames[last.stage]} · {statusLabel(last.status)}</p>}
+        {exceptions.map(event => <p key={event.id} className="mt-2 text-support text-status-degraded">
+          {event.agent ? agentLabels[event.agent] : stageNames[event.stage]} · <strong>{event.status === 'degraded' ? 'Completed with limitations' : 'Failed'}</strong>
+        </p>)}
+        {interruptions.map(event => <p key={event.id} className="mt-2 text-support text-status-degraded">
+          <strong>{current && review.status !== 'failed' && review.status !== 'pending' ? 'Finish unrecorded' : 'Interrupted'}</strong> · {event.agent ? agentLabels[event.agent] : stageNames[event.stage]} has a start without a recorded finish in this attempt.
+        </p>)}
+        {current && review.status === 'pending' && attempt > 0 && <p className="mt-2 text-support">Waiting to retry interrupted review.</p>}
+        {!events.length && <p className="mt-2 text-support text-fg-secondary">{active && current ? 'No checkpoints recorded for this attempt yet.' : 'No checkpoint events were recorded for this attempt.'}</p>}
+        <details className="mt-2 border-t border-divider">
+          <summary className="control-target control-focus w-fit cursor-pointer content-center rounded text-control text-link">Execution history · attempt {attempt}</summary>
+          {events.length ? <ol aria-label={`Recorded events for attempt ${attempt}`} className="divide-y divide-divider">
+            {events.map(event => <li key={event.id} className="grid items-baseline gap-x-4 py-2 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,auto)_minmax(0,1fr)]">
+              <span className="text-support font-semibold">{event.agent ? agentLabels[event.agent] + ' · ' : ''}{stageNames[event.stage]}</span>
+              <span className="text-meta text-fg-secondary">{statusLabel(event.status)}</span>
+              <FriendlyTimestamp label="Checkpoint recorded" kind="event" value={event.created_at} />
+            </li>)}
+          </ol> : <p className="pb-2 text-support text-fg-muted">Event times and stage details are unavailable.</p>}
+        </details>
+      </article>;
+    })}
+  </div>;
 }

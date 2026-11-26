@@ -1,4 +1,4 @@
-import {cleanup,render,screen,fireEvent} from '@testing-library/react';
+import {cleanup,render,screen,fireEvent,within} from '@testing-library/react';
 import {afterEach,it,expect,vi} from 'vitest';
 import {MemoryRouter,useLocation} from 'react-router-dom';
 import {StrictMode} from 'react';
@@ -130,9 +130,12 @@ it('shows current-attempt progress and does not claim an interrupted agent succe
   render(<AgentTimeline review={r}/>);expect(screen.getByText('Interrupted')).toBeInTheDocument();expect(screen.queryByText('Completed')).not.toBeInTheDocument();
 });
 it('charts terminal coverage separately from active and unavailable reviews',()=>{
-  render(<AgentOutcomeChart reviews={[review(),review({status:'running'})]} unavailable={1}/>);
+  render(<MemoryRouter><AgentOutcomeChart reviews={[review(),review({status:'running'})]} unavailable={1} total={3}/></MemoryRouter>);
   expect(screen.getByText(/1 terminal reviews · 1 active · 1 unavailable/)).toBeInTheDocument();
-  expect(screen.getByRole('img',{name:'Security: 0 ok, 1 degraded, 0 failed, 0 unrecorded'})).toBeInTheDocument();
+  const security = within(screen.getByRole('article', {name:'Security Agent'}));
+  for (const [label, count] of [['OK', '0'], ['Degraded', '1'], ['Failed', '0'], ['Unrecorded', '0']]) {
+    expect(security.getByText(label, {selector:'dt'}).nextElementSibling).toHaveTextContent(count);
+  }
 });
 it('filters real findings by severity without changing total findings',async()=>{
   const finding={id:1,agent:'security',severity:'high',title:'SQL construction',detail:null,file_path:'app.py',line:2,fixable:false,fix_data:null,evidence:null,rank:1};
@@ -140,5 +143,5 @@ it('filters real findings by severity without changing total findings',async()=>
   render(<MemoryRouter initialEntries={['/reviews/9']}><App/></MemoryRouter>);await screen.findByText('SQL construction');
   expect(screen.getByText(/Execution history · attempt/).closest('details')).not.toHaveAttribute('open');
   fireEvent.change(screen.getByLabelText('Filter findings by severity'),{target:{value:'low'}});
-  expect(screen.getByText('Showing 0 of 1 findings')).toBeInTheDocument();expect(screen.getByText('1 findings reported')).toBeInTheDocument();
+  expect(screen.getByText('Showing 0 of 1 findings')).toBeInTheDocument();expect(screen.getByRole('heading', { name: '1 finding reported' })).toBeInTheDocument();
 });

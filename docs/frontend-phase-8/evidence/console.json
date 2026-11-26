@@ -1,0 +1,45 @@
+{
+  "applicationLogs": [
+    {
+      "level": "error",
+      "message": "Error: useAuth must be used within an AuthProvider\n    at useAuth ([URL]\n    at ProtectedRoute ([URL]\n    at Object.react_stack_bottom_frame ([URL]\n    at renderWithHooks ([URL]\n    at updateFunctionComponent ([URL]\n    "
+    },
+    {
+      "level": "warn",
+      "message": "%s\n\n%s\n An error occurred in the <ProtectedRoute> component. Consider adding an error boundary to your tree to customize error handling behavior.\nVisit [URL] to learn more about error boundaries."
+    },
+    {
+      "level": "error",
+      "message": "Error: useAuth must be used within an AuthProvider\n    at useAuth ([URL]\n    at ProtectedRoute ([URL]\n    at Object.react_stack_bottom_frame ([URL]\n    at renderWithHooks ([URL]\n    at updateFunctionComponent ([URL]\n    "
+    },
+    {
+      "level": "warn",
+      "message": "%s\n\n%s\n An error occurred in the <ProtectedRoute> component. Consider adding an error boundary to your tree to customize error handling behavior.\nVisit [URL] to learn more about error boundaries."
+    },
+    {
+      "level": "error",
+      "message": "Error: useAuth must be used within an AuthProvider\n    at useAuth ([URL]\n    at ProtectedRoute ([URL]\n    at Object.react_stack_bottom_frame ([URL]\n    at renderWithHooks ([URL]\n    at updateFunctionComponent ([URL]\n    "
+    },
+    {
+      "level": "warn",
+      "message": "%s\n\n%s\n An error occurred in the <ProtectedRoute> component. Consider adding an error boundary to your tree to customize error handling behavior.\nVisit [URL] to learn more about error boundaries."
+    },
+    {
+      "level": "error",
+      "message": "Error: useAuth must be used within an AuthProvider\n    at useAuth ([URL]\n    at Navbar ([URL]\n    at Object.react_stack_bottom_frame ([URL]\n    at renderWithHooks ([URL]\n    at updateFunctionComponent ([URL]\n    at begin"
+    },
+    {
+      "level": "warn",
+      "message": "%s\n\n%s\n An error occurred in the <Navbar> component. Consider adding an error boundary to your tree to customize error handling behavior.\nVisit [URL] to learn more about error boundaries."
+    },
+    {
+      "level": "error",
+      "message": "Error: useAuth must be used within an AuthProvider\n    at useAuth ([URL]\n    at Navbar ([URL]\n    at Object.react_stack_bottom_frame ([URL]\n    at renderWithHooks ([URL]\n    at updateFunctionComponent ([URL]\n    at begin"
+    },
+    {
+      "level": "warn",
+      "message": "%s\n\n%s\n An error occurred in the <Navbar> component. Consider adding an error boundary to your tree to customize error handling behavior.\nVisit [URL] to learn more about error boundaries."
+    }
+  ],
+  "countAllTabWarningsAndErrors": 10
+}

@@ -1,0 +1,464 @@
+[
+  {
+    "name": "repositories",
+    "w": 1920,
+    "pr": null,
+    "primary": null,
+    "historyRow": null,
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "repositories",
+    "w": 1440,
+    "pr": null,
+    "primary": null,
+    "historyRow": null,
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "repositories",
+    "w": 1024,
+    "pr": null,
+    "primary": null,
+    "historyRow": null,
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "repositories",
+    "w": 768,
+    "pr": null,
+    "primary": null,
+    "historyRow": null,
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "repositories",
+    "w": 700,
+    "pr": null,
+    "primary": null,
+    "historyRow": null,
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "repositories",
+    "w": 390,
+    "pr": null,
+    "primary": null,
+    "historyRow": null,
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "repositories",
+    "w": 320,
+    "pr": null,
+    "primary": null,
+    "historyRow": null,
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "pulls",
+    "w": 1920,
+    "pr": {
+      "h": 278,
+      "w": 1232,
+      "x": 344,
+      "y": 354
+    },
+    "primary": {
+      "h": 40,
+      "w": 139,
+      "x": 1416,
+      "y": 472
+    },
+    "historyRow": null,
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "pulls",
+    "w": 1440,
+    "pr": {
+      "h": 278,
+      "w": 1232,
+      "x": 104,
+      "y": 354
+    },
+    "primary": {
+      "h": 40,
+      "w": 139,
+      "x": 1176,
+      "y": 472
+    },
+    "historyRow": null,
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "pulls",
+    "w": 1024,
+    "pr": {
+      "h": 278,
+      "w": 970,
+      "x": 24,
+      "y": 350
+    },
+    "primary": {
+      "h": 40,
+      "w": 139,
+      "x": 835,
+      "y": 468
+    },
+    "historyRow": null,
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "pulls",
+    "w": 768,
+    "pr": {
+      "h": 332,
+      "w": 720,
+      "x": 24,
+      "y": 390
+    },
+    "primary": {
+      "h": 40,
+      "w": 139,
+      "x": 45,
+      "y": 610
+    },
+    "historyRow": null,
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "pulls",
+    "w": 700,
+    "pr": {
+      "h": 344,
+      "w": 646,
+      "x": 24,
+      "y": 454
+    },
+    "primary": {
+      "h": 44,
+      "w": 139,
+      "x": 45,
+      "y": 678
+    },
+    "historyRow": null,
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "pulls",
+    "w": 390,
+    "pr": {
+      "h": 350,
+      "w": 353,
+      "x": 16,
+      "y": 506
+    },
+    "primary": {
+      "h": 44,
+      "w": 139,
+      "x": 33,
+      "y": 748
+    },
+    "historyRow": null,
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "pulls",
+    "w": 320,
+    "pr": {
+      "h": 407,
+      "w": 282,
+      "x": 16,
+      "y": 506
+    },
+    "primary": {
+      "h": 44,
+      "w": 139,
+      "x": 33,
+      "y": 753
+    },
+    "historyRow": null,
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "analytics",
+    "w": 1920,
+    "pr": null,
+    "primary": null,
+    "historyRow": {
+      "h": 133,
+      "w": 1231,
+      "x": 342,
+      "y": 1719
+    },
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "analytics",
+    "w": 1440,
+    "pr": null,
+    "primary": null,
+    "historyRow": {
+      "h": 133,
+      "w": 1231,
+      "x": 102,
+      "y": 1719
+    },
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "analytics",
+    "w": 1024,
+    "pr": null,
+    "primary": null,
+    "historyRow": {
+      "h": 133,
+      "w": 970,
+      "x": 24,
+      "y": 1777
+    },
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "analytics",
+    "w": 768,
+    "pr": null,
+    "primary": null,
+    "historyRow": {
+      "h": 327,
+      "w": 714,
+      "x": 24,
+      "y": 2522
+    },
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "analytics",
+    "w": 700,
+    "pr": null,
+    "primary": null,
+    "historyRow": {
+      "h": 331,
+      "w": 646,
+      "x": 24,
+      "y": 2570
+    },
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "analytics",
+    "w": 390,
+    "pr": null,
+    "primary": null,
+    "historyRow": {
+      "h": 385,
+      "w": 353,
+      "x": 16,
+      "y": 3123
+    },
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "analytics",
+    "w": 320,
+    "pr": null,
+    "primary": null,
+    "historyRow": {
+      "h": 393,
+      "w": 282,
+      "x": 16,
+      "y": 3370
+    },
+    "specialist": null,
+    "specialistSection": null
+  },
+  {
+    "name": "agent-history",
+    "w": 1920,
+    "pr": null,
+    "primary": {
+      "h": 44,
+      "w": 82,
+      "x": 669,
+      "y": 951
+    },
+    "historyRow": null,
+    "specialist": {
+      "h": 454,
+      "w": 299,
+      "x": 341,
+      "y": 557
+    },
+    "specialistSection": {
+      "h": 494,
+      "w": 1232,
+      "x": 341,
+      "y": 517
+    }
+  },
+  {
+    "name": "agent-history",
+    "w": 1440,
+    "pr": null,
+    "primary": {
+      "h": 44,
+      "w": 82,
+      "x": 429,
+      "y": 951
+    },
+    "historyRow": null,
+    "specialist": {
+      "h": 454,
+      "w": 299,
+      "x": 101,
+      "y": 557
+    },
+    "specialistSection": {
+      "h": 494,
+      "w": 1232,
+      "x": 101,
+      "y": 517
+    }
+  },
+  {
+    "name": "agent-history",
+    "w": 1024,
+    "pr": null,
+    "primary": {
+      "h": 44,
+      "w": 82,
+      "x": 532,
+      "y": 915
+    },
+    "historyRow": null,
+    "specialist": {
+      "h": 422,
+      "w": 479,
+      "x": 24,
+      "y": 553
+    },
+    "specialistSection": {
+      "h": 791,
+      "w": 970,
+      "x": 24,
+      "y": 513
+    }
+  },
+  {
+    "name": "agent-history",
+    "w": 768,
+    "pr": null,
+    "primary": {
+      "h": 44,
+      "w": 82,
+      "x": 404,
+      "y": 1045
+    },
+    "historyRow": null,
+    "specialist": {
+      "h": 442,
+      "w": 351,
+      "x": 24,
+      "y": 663
+    },
+    "specialistSection": {
+      "h": 831,
+      "w": 714,
+      "x": 24,
+      "y": 623
+    }
+  },
+  {
+    "name": "agent-history",
+    "w": 700,
+    "pr": null,
+    "primary": {
+      "h": 44,
+      "w": 82,
+      "x": 370,
+      "y": 1117
+    },
+    "historyRow": null,
+    "specialist": {
+      "h": 454,
+      "w": 317,
+      "x": 24,
+      "y": 723
+    },
+    "specialistSection": {
+      "h": 843,
+      "w": 646,
+      "x": 24,
+      "y": 683
+    }
+  },
+  {
+    "name": "agent-history",
+    "w": 390,
+    "pr": null,
+    "primary": {
+      "h": 44,
+      "w": 82,
+      "x": 33,
+      "y": 1603
+    },
+    "historyRow": null,
+    "specialist": {
+      "h": 336,
+      "w": 353,
+      "x": 16,
+      "y": 861
+    },
+    "specialistSection": {
+      "h": 1540,
+      "w": 353,
+      "x": 16,
+      "y": 821
+    }
+  },
+  {
+    "name": "agent-history",
+    "w": 320,
+    "pr": null,
+    "primary": {
+      "h": 44,
+      "w": 82,
+      "x": 33,
+      "y": 1669
+    },
+    "historyRow": null,
+    "specialist": {
+      "h": 336,
+      "w": 282,
+      "x": 16,
+      "y": 905
+    },
+    "specialistSection": {
+      "h": 1562,
+      "w": 282,
+      "x": 16,
+      "y": 865
+    }
+  }
+]

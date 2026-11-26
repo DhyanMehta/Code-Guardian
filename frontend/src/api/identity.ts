@@ -11,10 +11,21 @@ export function safeReturnPath(value: unknown): string {
 }
 export const positiveId = (value: string | null | undefined) => value && /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : null;
 export const repoUrl = (id: number, fullName: string) => `/repos/${fullName.split('/').map(encodeURIComponent).join('/')}?installation_id=${id}`;
+export function installationSettingsUrl(id: number, search?: URLSearchParams) {
+  const next = new URLSearchParams(search);
+  next.delete('tab');
+  next.set('installation_id', String(id));
+  return `/settings/installation?${next}`;
+}
 export const activeReview = (status: string) => status === 'pending' || status === 'running';
 export const terminalReview = (status: string) => ['completed', 'failed', 'skipped'].includes(status);
 export const statusLabel = (status: string) => status === 'pending' ? 'Queued' : status.charAt(0).toUpperCase() + status.slice(1).replaceAll('_', ' ');
 export function githubUrl(path: string) { return `https://github.com/${path.split('/').map(encodeURIComponent).join('/')}`; }
+export function repositoryDestination(fullName: string) {
+  const parts = fullName.split('/');
+  return parts.length === 2 && parts.every(part => /^[\w.-]+$/.test(part) && part !== '.' && part !== '..') ? githubUrl(fullName) : null;
+}
+
 export function appInstallUrl(slug: string | undefined) { return slug && /^[a-z0-9-]+$/i.test(slug) ? `https://github.com/apps/${slug}/installations/new` : null; }
 
 export interface HistoryLookup { items: ReviewItem[]; latest: Record<number, ReviewItem>; exhausted: boolean; total: number }

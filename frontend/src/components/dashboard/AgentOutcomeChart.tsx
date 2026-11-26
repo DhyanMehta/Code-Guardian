@@ -1,57 +1,61 @@
+import { Link } from 'react-router-dom';
 import { agents, type ReviewDetail } from '../../api/contracts';
+import { activeReview } from '../../api/identity';
+import { FriendlyTimestamp } from '../common/FriendlyTimestamp';
+import { SectionCard } from '../common/SectionCard';
+import { diagnosticText } from '../reviews/diagnosticText';
 import { agentLabels } from '../reviews/ReviewPresentation';
-const categories = ['ok','degraded','failed','unrecorded'] as const;
-const colors = {ok:'bg-tertiary-500',degraded:'bg-yellow-500',failed:'bg-red-500',unrecorded:'bg-neutral-600'};
-export function AgentOutcomeChart({ reviews, unavailable }: { reviews: ReviewDetail[]; unavailable: number }) {
-  const completed = reviews.filter(r => ['completed', 'failed', 'skipped'].includes(r.status));
-  return (
-    <section className="rounded-xl border border-neutral-800/90 bg-neutral-900/80 p-5 space-y-5 shadow-xs">
-      <div className="pb-3 border-b border-neutral-800/60">
-        <h2 className="font-semibold text-base text-neutral-100">Agent outcomes in loaded history</h2>
-        <p className="text-xs font-mono text-neutral-400 mt-1">
-          {completed.length} terminal reviews · {reviews.length - completed.length} active · {unavailable} unavailable. Counts are review outcomes, not execution coverage or a live agent workload.
-        </p>
-      </div>
+import { isSpecialistIssue, outcomeColors, outcomeLabels, outcomes, outcomeText, recordedOutcome } from './specialistEvidence';
 
-      <div className="grid gap-4">
+export function AgentOutcomeChart({ reviews, unavailable, total }: { reviews: ReviewDetail[]; unavailable: number; total: number }) {
+  const terminal = reviews.filter(review => !activeReview(review.status));
+  const remaining = Math.max(0, total - reviews.length - unavailable);
+
+  return <>
+    <SectionCard aria-label="Loaded review sample" className="space-y-2">
+      <p className="text-row-title">{reviews.length + unavailable} of {total} review records in the loaded sample</p>
+      <p className="text-support text-fg-secondary">{terminal.length} terminal reviews · {reviews.length - terminal.length} active · {unavailable} unavailable · {remaining} outside this sample</p>
+      <p className="text-support text-fg-muted">Historical outcomes use the {terminal.length} loaded terminal reviews. Execution and coverage are recorded separately.</p>
+    </SectionCard>
+    <section aria-labelledby="specialist-outcomes" className="space-y-3">
+      <h3 id="specialist-outcomes" className="text-section">Specialist outcomes</h3>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {agents.map(agent => {
+          const runs = terminal.map(review => review.agent_runs.find(run => run.agent === agent));
           const counts = { ok: 0, degraded: 0, failed: 0, unrecorded: 0 };
-          for (const review of completed) {
-            const run = review.agent_runs.find(r => r.agent === agent);
-            const outcome =
-              run?.recorded && ['ok', 'degraded', 'failed'].includes(run.outcome ?? '')
-                ? (run.outcome as 'ok' | 'degraded' | 'failed')
-                : 'unrecorded';
-            counts[outcome]++;
-          }
-          return (
-            <div key={agent} className="space-y-2 p-3.5 rounded-lg bg-neutral-950/60 border border-neutral-800/60">
-              <div className="flex items-center justify-between">
-                <h3 className="font-medium text-sm text-neutral-200">{agentLabels[agent]}</h3>
-                <span className="text-[11px] font-mono text-neutral-400">
-                  {counts.ok}/{completed.length} recorded with outcome OK
-                </span>
-              </div>
-              <div
-                role="img"
-                aria-label={`${agentLabels[agent]}: ${categories.map(c => `${counts[c]} ${c}`).join(', ')}`}
-                className="h-3 flex overflow-hidden rounded-full bg-neutral-800"
-              >
-                {categories.map(c => (
-                  <span
-                    key={c}
-                    className={`${colors[c]} transition-all duration-300`}
-                    style={{ width: `${completed.length ? (counts[c] / completed.length) * 100 : 0}%` }}
-                  />
-                ))}
-              </div>
-              <p className="text-xs font-mono text-neutral-400">
-                {categories.map(c => `${c === 'ok' ? 'Outcome OK' : c}: ${counts[c]}`).join(' · ')}
-              </p>
+          for (const run of runs) counts[recordedOutcome(run)]++;
+          const missing = runs.filter(run => !run?.coverage).length;
+          const limited = runs.filter(run => run?.coverage?.status === 'partial' || run?.coverage?.status === 'unknown').length;
+          const issueReview = reviews.find(review => review.agent_runs.some(run => run.agent === agent && isSpecialistIssue(run)));
+          const issue = issueReview?.agent_runs.find(run => run.agent === agent && isSpecialistIssue(run));
+
+          return <article key={agent} aria-label={`${agentLabels[agent]} Agent`} className="min-w-0 rounded-xl border border-divider bg-panel p-4 [overflow-wrap:anywhere]">
+            <h4 className="text-row-title">{agentLabels[agent]} Agent</h4>
+            <p className="mt-1 text-meta text-fg-muted">{counts.ok} of {terminal.length} recorded with outcome OK</p>
+            <dl className="mt-3 grid grid-cols-2 gap-2">
+              {outcomes.map(outcome => <div key={outcome} className="rounded-md bg-panel-inset px-2 py-1.5 max-sm:flex max-sm:flex-wrap max-sm:items-baseline max-sm:justify-between max-sm:gap-x-1">
+                <dt className={`text-meta ${outcomeColors[outcome]}`}>{outcomeLabels[outcome]}</dt>
+                <dd className="text-row-title tabular-nums">{counts[outcome]}</dd>
+              </div>)}
+            </dl>
+            <p className="mt-3 text-meta text-fg-secondary">Coverage unrecorded for {missing} · partial or unknown for {limited}</p>
+            <div className="mt-3 border-t border-divider pt-3">
+              <p className="text-meta font-semibold">Latest issue in loaded history</p>
+              {issueReview && issue ? <>
+                <p className="mt-1 text-support text-status-degraded">
+                  Outcome {outcomeText(issue)}{issue.coverage?.status === 'partial' && ' · Partial coverage'}
+                </p>
+                {issue.failure_reason
+                  ? <p className="line-clamp-2 text-support text-fg-secondary">{diagnosticText(issue.failure_reason)}</p>
+                  : <p className="text-support text-fg-muted">Reason not recorded</p>}
+                <FriendlyTimestamp kind="event" value={issueReview.created_at} label="Review created" />
+                <Link to={`/reviews/${issueReview.id}#agents`} aria-label={`View ${agentLabels[agent]} issue in review #${issueReview.id}`}
+                  className="control-focus inline-flex min-h-11 items-center rounded text-control text-link underline underline-offset-4">Review #{issueReview.id}</Link>
+              </> : <p className="mt-1 text-support text-fg-muted">None recorded in this sample.</p>}
             </div>
-          );
+          </article>;
         })}
       </div>
     </section>
-  );
+  </>;
 }

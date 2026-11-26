@@ -1,148 +1,92 @@
-import { Link } from 'react-router-dom';
+import { RefreshCw } from 'lucide-react';
+import { severities, type TrendsResponse } from '../../api/contracts';
 import { endpoints } from '../../api/endpoints';
 import { useResource } from '../../api/resources';
-import { AsyncState } from '../common/AsyncState';
-import { Counts, panelClass } from '../reviews/ReviewPresentation';
+import { Button } from '../common/Button';
+import { ScopedRefreshStatus } from '../common/ScopedRefreshStatus';
+import { SectionCard } from '../common/SectionCard';
+import { SeverityBadge } from '../common/SeverityBadge';
+import { StatCard } from '../common/StatCard';
+import { AnalyticsHistory } from './AnalyticsHistory';
+import { WeightedFindings } from './WeightedFindings';
+
+const severityFill = { critical: 'bg-risk-critical', high: 'bg-risk-high', medium: 'bg-risk-medium', low: 'bg-risk-low', info: 'bg-risk-info', unknown: 'bg-risk-unknown' };
+
+function CountList({ counts }: { counts: Record<string, number> }) {
+  return <dl className="mt-3 divide-y divide-divider">{Object.entries(counts).map(([label, count]) =>
+    <div key={label} className="flex items-baseline justify-between gap-3 py-2">
+      <dt className="text-support text-fg-secondary">{label}</dt><dd className="font-semibold tabular-nums">{count}</dd>
+    </div>)}</dl>;
+}
+
+function AnalyticsEvidence({ data }: { data: TrendsResponse }) {
+  const { range, totals, points } = data;
+  const maxSeverity = Math.max(...severities.map(s => totals.severity_counts[s]));
+  const outcomes = {
+    Completed: totals.completed, Failed: totals.failed, Skipped: totals.skipped,
+    Queued: points.filter(p => p.status === 'pending').length, Running: points.filter(p => p.status === 'running').length,
+  };
+  return <>
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <StatCard label="Review records" value={totals.reviews} secondaryText={`Latest ${range.review_count} of up to ${range.requested_limit} records`} />
+      <StatCard label="Completed reviews" value={totals.completed} secondaryText="Recorded analysis outcome" />
+      <StatCard label="Reported findings" value={totals.findings} secondaryText="Occurrences across sampled reviews" />
+      <StatCard label="Full execution coverage records" value={`${totals.coverage_recorded_reviews} of ${totals.reviews}`} secondaryText="Evidence from all four specialists" />
+    </div>
+    <div className="grid items-start gap-4 lg:grid-cols-2">
+      <SectionCard>
+        <h3 className="text-section">Analysis outcomes</h3>
+        <p className="mt-1 text-support text-fg-muted">Recorded status of {totals.reviews} sampled reviews.</p>
+        <CountList counts={outcomes} />
+      </SectionCard>
+      <SectionCard>
+        <h3 className="text-section">Execution coverage</h3>
+        <p className="mt-1 text-support text-fg-muted">Full records require an outcome and coverage record for each specialist. A review can appear in several counts below.</p>
+        <CountList counts={{
+          'Confirmed complete': totals.coverage_complete_reviews,
+          'Full records, coverage limited': points.filter(p => p.coverage_recorded && !p.coverage_complete).length,
+          'Missing full records': totals.reviews - totals.coverage_recorded_reviews,
+          'Degraded or failed specialist outcome': points.filter(p => p.degraded_agents.length > 0).length,
+          'All reviews without confirmed complete coverage': totals.reviews_with_coverage_gap,
+        }} />
+      </SectionCard>
+    </div>
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+      <SectionCard>
+        <h3 className="text-section">Findings by severity</h3>
+        <p className="mt-1 text-support text-fg-muted">{maxSeverity ? `Bar scale: 0 to ${maxSeverity} reported occurrences.` : 'Every severity bucket has zero reported occurrences.'}</p>
+        <dl className="mt-4 space-y-3">{severities.map(s => <div key={s} className="grid grid-cols-[6rem_minmax(0,1fr)_auto] items-center gap-2">
+          <dt><SeverityBadge severity={s} size="sm" /></dt>
+          <dd className="contents"><span aria-hidden="true" className="block h-2 overflow-hidden rounded bg-panel-raised">
+            <span className={`block h-full rounded ${severityFill[s]}`} style={{ width: `${maxSeverity ? totals.severity_counts[s] * 100 / maxSeverity : 0}%` }} />
+          </span><span className="min-w-6 text-right tabular-nums">{totals.severity_counts[s]}</span></dd>
+        </div>)}</dl>
+      </SectionCard>
+      <WeightedFindings points={points} totals={totals} />
+    </div>
+    <SectionCard>
+      <h3 className="text-section">Auto-fix activity</h3>
+      <p className="mt-1 text-support text-fg-muted">Sampled reviews with a saved auto-fix status and their recorded decisions.</p>
+      <dl className="mt-4 grid gap-3 sm:grid-cols-3">{Object.entries({
+        'Reviews with activity': totals.autofix.created, 'Approved decisions': totals.autofix.approved, 'Rejected decisions': totals.autofix.rejected,
+      }).map(([label, value]) => <div key={label} className="border-l-2 border-divider pl-3">
+        <dt className="text-meta text-fg-secondary">{label}</dt><dd className="text-section tabular-nums">{value}</dd>
+      </div>)}</dl>
+    </SectionCard>
+    {points.length > 0 && <AnalyticsHistory points={points} />}
+  </>;
+}
+
 export function AnalyticsTab({ scope, installation, repo }: { scope: string; installation: number; repo: string }) {
   const state = useResource(`${scope}:trends`, s => endpoints.trends(installation, repo, s), () => 30_000);
-  const data = state.data;
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-neutral-800/60">
-        <div>
-          <h2 className="text-base font-semibold text-neutral-100">Repository Analytics & Trends</h2>
-          <p className="text-xs text-neutral-400">Aggregated review performance, coverage metrics, and severity distributions.</p>
-        </div>
-        <button
-          type="button"
-          className="text-xs font-mono font-medium text-primary-400 hover:text-primary-300 underline underline-offset-2 cursor-pointer self-start sm:self-auto"
-          onClick={state.refresh}
-        >
-          Refresh analytics
-        </button>
+  return <div className="min-w-0 space-y-5 text-fg">
+    <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+      <div>
+        <h2 className="text-page md:text-page-wide">Repository analytics</h2>
+        <ScopedRefreshStatus sources={[{ ...state, label: 'Analytics', hasData: !!state.data }]} />
       </div>
-
-      <AsyncState {...state} hasData={!!data} />
-
-      {data && (
-        <div className="space-y-6">
-          {/* KPI Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {[
-              ['Reviews', data.totals.reviews],
-              ['Completed', data.totals.completed],
-              ['Failed / skipped', `${data.totals.failed} / ${data.totals.skipped}`],
-              ['Coverage recorded', data.totals.coverage_recorded_reviews],
-              ['Coverage complete', data.totals.coverage_complete_reviews],
-              ['Coverage gaps', data.totals.reviews_with_coverage_gap],
-              ['Auto-fix attempts', data.totals.autofix.created],
-              ['Approved', data.totals.autofix.approved],
-              ['Rejected', data.totals.autofix.rejected],
-            ].map(([label, value]) => (
-              <div key={label} className={panelClass}>
-                <p className="text-xs font-mono uppercase tracking-wider text-neutral-400">{label}</p>
-                <p className="text-2xl font-mono font-bold text-neutral-100 mt-1">{value}</p>
-              </div>
-            ))}
-          </div>
-
-          <div className="space-y-2">
-            <Counts counts={data.totals.severity_counts} />
-            <p className="text-xs font-mono text-neutral-400">
-              Latest {data.range.review_count} reviews in this range. Weighted index uses server weights: {Object.entries(data.totals.weights_used).map(([s, n]) => `${s}=${n}`).join(', ')}.
-            </p>
-          </div>
-
-          {!data.points.length ? (
-            <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-8 text-center text-neutral-400">
-              <p>No review history yet.</p>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {/* Weighted Findings Chart */}
-              <div className={panelClass}>
-                <div className="flex items-center justify-between pb-2 border-b border-neutral-800/60">
-                  <h3 className="font-semibold text-sm text-neutral-100">Weighted findings over time</h3>
-                  <span className="text-[11px] font-mono text-neutral-400">Relative finding severity</span>
-                </div>
-
-                <div
-                  className="flex items-end gap-1.5 h-36 pt-4 pb-2 px-2 bg-neutral-950/60 rounded-xl border border-neutral-800/80"
-                  role="img"
-                  aria-label="Weighted finding index, oldest to newest; exact values and coverage limitations follow in the table"
-                >
-                  {data.points.map(p => (
-                    <div
-                      key={p.review_id}
-                      title={`Review ${p.review_id}: ${p.weighted_index}${p.coverage_complete ? '' : ' — incomplete coverage'}`}
-                      className={`flex-1 min-w-1.5 rounded-t-sm transition-all duration-150 hover:opacity-80 ${
-                        p.coverage_complete
-                          ? 'bg-primary-500'
-                          : 'bg-neutral-600 border border-dashed border-severity-medium'
-                      }`}
-                      style={{
-                        height: `${Math.max(
-                          4,
-                          (p.weighted_index / Math.max(1, ...data.points.map(q => q.weighted_index))) * 100
-                        )}%`,
-                      }}
-                    />
-                  ))}
-                </div>
-
-                <p className="text-xs text-neutral-400 italic">
-                  Gray points have incomplete or unknown coverage. Lower counts do not establish an improvement.
-                </p>
-              </div>
-
-              {/* Data Table */}
-              <div className="rounded-xl border border-neutral-800/90 bg-neutral-900/80 overflow-hidden shadow-xs">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm text-left">
-                    <thead className="bg-neutral-950/80 text-xs font-mono text-neutral-400 border-b border-neutral-800">
-                      <tr>
-                        <th className="py-3 px-4 font-medium uppercase tracking-wider">Review</th>
-                        <th className="py-3 px-4 font-medium uppercase tracking-wider">Status</th>
-                        <th className="py-3 px-4 font-medium uppercase tracking-wider">Findings / index</th>
-                        <th className="py-3 px-4 font-medium uppercase tracking-wider">Coverage</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-neutral-800/60">
-                      {data.points.map(p => (
-                        <tr key={p.review_id} className="hover:bg-neutral-850/40 transition-colors">
-                          <td className="py-3 px-4 font-mono">
-                            <Link to={`/reviews/${p.review_id}`} className="text-primary-400 hover:text-primary-300 font-semibold underline underline-offset-2">
-                              #{p.review_id} · PR #{p.pr_number}
-                            </Link>
-                            <p className="text-xs text-neutral-500 mt-0.5">{p.created_at ?? 'Date not recorded'}</p>
-                          </td>
-                          <td className="py-3 px-4 font-mono text-xs text-neutral-300 capitalize">
-                            {p.status}
-                          </td>
-                          <td className="py-3 px-4 font-mono text-xs text-neutral-200">
-                            {p.total_findings} / {p.weighted_index}
-                          </td>
-                          <td className="py-3 px-4 text-xs font-mono">
-                            {p.coverage_complete ? (
-                              <span className="text-tertiary-400 font-semibold">Complete</span>
-                            ) : (
-                              <div className="space-y-0.5 text-severity-medium">
-                                {p.degraded_agents.length > 0 && <p>Degraded/failed: {p.degraded_agents.join(', ')}</p>}
-                                {p.unrecorded_agents.length > 0 && <p>Unrecorded: {p.unrecorded_agents.join(', ')}</p>}
-                                {!p.degraded_agents.length && !p.unrecorded_agents.length && 'Incomplete'}
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
+      <Button variant="secondary" aria-busy={state.loading} onClick={state.refresh}><RefreshCw aria-hidden="true" className="size-4" />Refresh analytics</Button>
+    </header>
+    {state.data && <AnalyticsEvidence data={state.data} />}
+  </div>;
 }

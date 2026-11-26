@@ -1,4 +1,5 @@
 import React, { ReactNode } from 'react';
+import { SectionCard } from './SectionCard';
 
 export interface StatCardProps {
   label: string;
@@ -23,49 +24,36 @@ export const StatCard: React.FC<StatCardProps> = ({
   id,
 }) => {
   return (
-    <div
-      id={id}
-      className={`bg-neutral-900/80 hover:bg-neutral-900 border border-neutral-800 hover:border-neutral-700/80 rounded-xl p-5 flex flex-col justify-between shadow-xs transition-all duration-150 ${className}`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <span className="text-xs font-medium uppercase tracking-wider text-neutral-400">
+    <SectionCard id={id} className={className}>
+      <dl>
+        <dt className="flex items-start justify-between gap-2 text-meta md:text-meta-wide text-fg-muted">
           {label}
-        </span>
-        {icon && (
-          <div className="text-neutral-400 shrink-0">
-            {icon}
-          </div>
-        )}
-      </div>
-
-      <div className="mt-2 flex items-baseline gap-2">
-        <span className="text-2xl font-bold font-mono text-neutral-100 tracking-tight">
-          {value}
-        </span>
-      </div>
-
+          {icon && <span className="shrink-0 text-fg-muted" aria-hidden="true">{icon}</span>}
+        </dt>
+        <dd className="mt-1 text-metric md:text-metric-wide tabular-nums text-fg">{value}</dd>
+      </dl>
       {(secondaryText || trend) && (
-        <div className="mt-2 pt-2 border-t border-neutral-800/60 flex items-center justify-between text-xs">
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-divider pt-2 text-meta md:text-meta-wide">
           {secondaryText && (
-            <span className="text-neutral-400">
+            <span className="text-fg-muted">
               {secondaryText}
             </span>
           )}
           {trend && (
             <span
-              className={`font-mono font-medium ${
+              className={
                 trend.direction === 'up'
-                  ? 'text-tertiary-400'
+                  ? 'text-status-ok'
                   : trend.direction === 'down'
-                  ? 'text-severity-critical'
-                  : 'text-neutral-400'
-              }`}
+                  ? 'text-status-failed'
+                  : 'text-fg-muted'
+              }
             >
               {trend.text}
             </span>
           )}
         </div>
       )}
-    </div>
+    </SectionCard>
   );
 };

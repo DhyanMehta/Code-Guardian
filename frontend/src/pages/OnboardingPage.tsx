@@ -4,7 +4,10 @@ import { useAuth, navigation, installationResumeKey } from '../context/AuthConte
 import { useResource } from '../api/resources';
 import { endpoints } from '../api/endpoints';
 import { positiveId } from '../api/identity';
-import { AsyncState } from '../components/common/AsyncState';
+import { Button } from '../components/common/Button';
+import { EntryPanel, entryAlert, entryLink } from '../components/common/EntryPanel';
+import { ScopedRefreshStatus } from '../components/common/ScopedRefreshStatus';
+import { diagnosticError, diagnosticText } from '../components/reviews/diagnosticText';
 export function OnboardingPage() {
   const {user,refreshInstallations} = useAuth();
   const [params] = useSearchParams();
@@ -47,16 +50,32 @@ export function OnboardingPage() {
       return <Navigate to={`/repos?installation_id=${verifiedId}`} replace />;
     }
     return (
-      <section className="max-w-xl mx-auto rounded-xl border border-neutral-800 p-8 space-y-5">
-        <h1 className="text-2xl font-bold">Repository access</h1>
-        {checking && <p role="status">Checking repository access…</p>}
-        {cancelled && <p role="status">GitHub did not confirm the repository access update.</p>}
-        {error && <p role="alert">{error}</p>}
-        <button className="underline disabled:opacity-50" disabled={checking} onClick={() => void refresh()}>Refresh GitHub access</button>
-        <Link className="block underline" to="/repos">View repositories</Link>
-      </section>
+      <EntryPanel title="Repository access">
+        {checking && <p role="status" className="text-support text-fg-muted">Checking repository access…</p>}
+        {cancelled && <p role="status" className="text-support text-fg-secondary">GitHub did not confirm the repository access update.</p>}
+        {error && <p role="alert" className={entryAlert}>{diagnosticText(error)}</p>}
+        <div className="flex flex-wrap gap-3">
+          <Button disabled={checking} aria-busy={checking || undefined} onClick={() => void refresh()}>Refresh GitHub access</Button>
+          <Link className={entryLink} to="/repos">View repositories</Link>
+        </div>
+      </EntryPanel>
     );
   }
   if (user?.installations.length && !checking && !error) return <Navigate to="/repos" replace/>;
-  return <section className="max-w-xl mx-auto rounded-xl border border-neutral-800 p-8 space-y-5"><p className="text-primary-400 text-sm">Connect your code · Step 2 of 2</p><h1 className="text-2xl font-bold">Choose repositories on GitHub</h1><p>Sign-in is complete. Install the CodeGuardian GitHub App on the account and repositories you want reviewed.</p><AsyncState {...state} hasData={!!state.data}/>{safe && <a className="inline-block rounded-md bg-neutral-100 text-neutral-950 px-4 py-2 hover:bg-white" href={safe} onClick={()=>sessionStorage.setItem(`install-redirect:${user?.id}`,'1')}>Choose repositories on GitHub</a>}{url && !safe && <p role="alert">The server returned an invalid installation URL.</p>}{checking && <p role="status">Checking your GitHub installation access…</p>}{error && <p role="alert">{error}</p>}{checked && !user?.installations.length && <p role="status">No accessible installation was found. If approval is required, ask your organization owner to approve the installation.</p>}<p className="text-sm text-neutral-400">If you cancelled, choose repositories again. Access refreshes automatically when GitHub returns you here. You can also check again below.</p><button className="underline disabled:opacity-50" disabled={checking} onClick={()=>void refresh()}>Refresh GitHub access</button></section>;
+  return <EntryPanel title="Choose repositories on GitHub">
+    <p className="text-support text-fg-secondary">Install the CodeGuardian GitHub App on the account and repositories you want reviewed.</p>
+    {checking && <p role="status" className="text-support text-fg-muted">Checking your GitHub installation access…</p>}
+    {error && <p role="alert" className={entryAlert}>{diagnosticText(error)}</p>}
+    {checked && !user?.installations.length && <p role="status" className="text-support text-fg-secondary">
+      No accessible installation was found. If approval is required, ask your organization owner to approve the installation.
+    </p>}
+    {!safe && <ScopedRefreshStatus sources={[{ ...state, label: 'GitHub installation link', hasData: !!state.data, error: diagnosticError(state.error) }]} />}
+    {url && !safe && <p role="alert" className={entryAlert}>The server returned an invalid installation URL.</p>}
+    <p className="text-support text-fg-muted">Access refreshes when GitHub returns you here. You can also refresh if an owner approves access later.</p>
+    <div className="flex flex-wrap gap-3">
+      {safe && <a className="control-target control-focus inline-flex items-center rounded-lg bg-action px-3 text-control text-action-foreground hover:bg-action-hover"
+        href={safe} onClick={() => sessionStorage.setItem(`install-redirect:${user?.id}`, '1')}>Choose repositories on GitHub</a>}
+      <Button variant="secondary" disabled={checking} aria-busy={checking || undefined} onClick={() => void refresh()}>Refresh GitHub access</Button>
+    </div>
+  </EntryPanel>;
 }

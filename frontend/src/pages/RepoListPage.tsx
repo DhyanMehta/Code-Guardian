@@ -1,133 +1,190 @@
-import { useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { GitBranch, Lock, Globe } from 'lucide-react';
+import { ArrowRight, BookMarked, ExternalLink, GitBranch, Globe, Lock, RefreshCw, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useInstallation } from '../context/InstallationContext';
 import { useResource } from '../api/resources';
 import { endpoints } from '../api/endpoints';
 import { appInstallUrl, repoUrl } from '../api/identity';
+import type { Repository } from '../api/contracts';
 import { SearchInput } from '../components/common/SearchInput';
 import { InstallationPicker } from '../components/common/InstallationPicker';
 import { OnboardingEmptyState } from '../components/common/OnboardingEmptyState';
-import { AsyncState } from '../components/common/AsyncState';
-export function RepoListPage() {
-  const { user, loginWithGitHub } = useAuth(); const { selected, installations } = useInstallation();
-  const [search, setSearch] = useState('');
-  const state = useResource(user && selected && !selected.suspended ? `u:${user.id}:i:${selected.id}:repos` : null, s => endpoints.repos(selected!.id, s));
-  const installUrl = appInstallUrl(import.meta.env.VITE_GITHUB_APP_SLUG || selected?.app_slug);
+import { Button } from '../components/common/Button';
+import { IconButton } from '../components/common/IconButton';
+import { SectionCard } from '../components/common/SectionCard';
+import { ScopedRefreshStatus } from '../components/common/ScopedRefreshStatus';
+
+function githubRepositoryUrl(repository: Repository) {
+  try {
+    const url = new URL(repository.html_url);
+    if (url.origin === 'https://github.com' && !url.username && !url.password &&
+        !url.search && !url.hash &&
+        decodeURIComponent(url.pathname).replace(/\/$/, '').toLowerCase() === '/' + repository.full_name.toLowerCase()) {
+      return repository.html_url;
+    }
+  } catch {
+    // The workspace link remains available even if GitHub did not supply a usable URL.
+  }
+  return undefined;
+}
+
+function RepositoryRow({ repository, installationId }: { repository: Repository; installationId: number }) {
+  const github = githubRepositoryUrl(repository);
+  const Visibility = repository.private ? Lock : Globe;
+
   return (
-    <div className="space-y-6">
-      <header className="border-b border-neutral-800/80 pb-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-neutral-100">Connected Repositories</h1>
-            <p className="text-sm text-neutral-400 mt-1">Repositories accessible to your GitHub App installation.</p>
-          </div>
-          {installUrl && (
-            <a
-              className="inline-flex items-center gap-1.5 text-xs font-mono font-medium text-primary-400 hover:text-primary-300 underline underline-offset-4 self-start sm:self-auto"
-              href={installUrl}
-            >
-              Update GitHub App access
-            </a>
+    <article className="grid min-w-0 gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-4 sm:py-4">
+      <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5">
+        <span className="grid size-8 place-items-center rounded-lg border border-divider bg-panel-raised text-fg-secondary sm:row-span-2 sm:size-9 sm:self-start">
+          <BookMarked aria-hidden="true" className="size-4" />
+        </span>
+        <h2 className="text-row-title text-fg [overflow-wrap:anywhere] md:text-row-title-wide">{repository.full_name}</h2>
+        <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-meta text-fg-muted sm:col-span-1 sm:col-start-2 md:text-meta-wide">
+          <span className="inline-flex items-center gap-1.5">
+            <Visibility aria-hidden="true" className="size-3.5 shrink-0" />
+            {repository.private ? 'Private' : 'Public'}
+          </span>
+          {repository.default_branch && (
+            <span className="inline-flex min-w-0 max-w-full items-start gap-1.5" title="Default branch">
+              <GitBranch aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+              <span className="sr-only">Default branch </span>
+              <code className="min-w-0 font-mono text-fg-secondary [overflow-wrap:anywhere]">{repository.default_branch}</code>
+            </span>
           )}
+          <span><span className="font-semibold tabular-nums text-fg-secondary">{repository.open_issues_count}</span> open issues and pull requests</span>
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+        <Link
+          to={repoUrl(installationId, repository.full_name)}
+          aria-label={`View pull requests for ${repository.full_name}`}
+          className="control-target control-focus inline-flex items-center justify-center gap-1.5 rounded-lg bg-action px-3 text-control text-action-foreground transition-colors hover:bg-action-hover md:text-control-wide"
+        >
+          View pull requests
+          <ArrowRight aria-hidden="true" className="hidden size-4 shrink-0 sm:block" />
+        </Link>
+        {github && (
+          <a
+            href={github}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Open ${repository.full_name} on GitHub (opens in a new tab)`}
+            className="control-target control-focus inline-flex items-center justify-center gap-1.5 rounded-lg px-1 text-control text-fg-secondary transition-colors hover:bg-action-secondary-hover hover:text-fg sm:px-2 md:text-control-wide"
+          >
+            GitHub
+            <ExternalLink aria-hidden="true" className="size-4 shrink-0" />
+          </a>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function RepositoryList({ installationId, userId }: { installationId: number; userId: number }) {
+  const searchId = useId();
+  const searchInput = useRef<HTMLInputElement>(null);
+  const [search, setSearch] = useState('');
+  const state = useResource(`u:${userId}:i:${installationId}:repos`, signal => endpoints.repos(installationId, signal));
+  const query = search.trim().toLowerCase();
+  const filtered = state.data?.filter(repository => repository.full_name.toLowerCase().includes(query));
+  const count = filtered?.length ?? 0;
+
+  function clearSearch() {
+    setSearch('');
+    searchInput.current?.focus();
+  }
+
+  return (
+    <div className="space-y-3">
+      <div data-workspace-toolbar className="space-y-1">
+        <div className="flex min-w-0 flex-wrap items-end gap-x-3 gap-y-2">
+          <div className="min-w-0 flex-1 sm:max-w-md">
+            <label htmlFor={searchId} className="mb-1 block text-control text-fg-secondary">Search repositories</label>
+            <SearchInput
+              ref={searchInput}
+              id={searchId}
+              aria-label="Search repositories"
+              placeholder="Filter by name…"
+              className={search ? 'pr-14 [&::-webkit-search-cancel-button]:appearance-none' : ''}
+              value={search}
+              onChange={event => setSearch(event.target.value)}
+              accessory={search ? <IconButton aria-label="Clear repository search" variant="quiet" size="sm" icon={<X />} onClick={clearSearch} /> : undefined}
+            />
+          </div>
+          <Button variant="secondary" className="shrink-0 max-sm:px-0" onClick={state.refresh} aria-busy={state.loading || undefined} aria-label="Refresh repositories" title="Refresh repositories">
+            <RefreshCw aria-hidden="true" className="size-4 shrink-0" />
+            <span className="hidden sm:inline">Refresh</span>
+          </Button>
+        </div>
+
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4">
+          {state.data && <p role="status" className="text-meta font-medium text-fg-secondary md:text-meta-wide">
+            {query ? `${count} of ${state.data.length} repositories` : `${count} ${count === 1 ? 'repository' : 'repositories'}`}
+          </p>}
+          <ScopedRefreshStatus sources={[{ ...state, label: 'Repositories', hasData: !!state.data }]} />
+        </div>
+      </div>
+
+      {state.data?.length === 0 && (
+        <SectionCard className="space-y-1">
+          <h2 className="text-row-title text-fg">No accessible repositories</h2>
+          <p className="text-support text-fg-muted">Update GitHub App access, then refresh this list.</p>
+        </SectionCard>
+      )}
+
+      {!!state.data?.length && count === 0 && (
+        <SectionCard className="space-y-2">
+          <h2 className="text-row-title text-fg">No repositories match your search</h2>
+          <Button variant="secondary" size="sm" onClick={clearSearch}>Clear search</Button>
+        </SectionCard>
+      )}
+
+      {count > 0 && (
+        <ul aria-label="Repositories" className="min-w-0 divide-y divide-divider rounded-xl border border-divider bg-panel">
+          {filtered?.map(repository => (
+            <li key={repository.id}><RepositoryRow repository={repository} installationId={installationId} /></li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+export function RepoListPage() {
+  const { user, loginWithGitHub } = useAuth();
+  const { selected, installations } = useInstallation();
+  const installUrl = appInstallUrl(import.meta.env.VITE_GITHUB_APP_SLUG || selected?.app_slug);
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-4">
+      <header className="flex flex-wrap items-center justify-between gap-x-5 gap-y-1 border-b border-divider pb-3">
+        <div>
+          <h1 className="text-page tracking-tight text-fg md:text-page-wide">Connected Repositories</h1>
+          <p className="mt-1 text-support text-fg-muted">Repositories connected through your GitHub App.</p>
+        </div>
+        {installUrl && (
+          <a
+            className="control-target control-focus inline-flex max-w-full items-center gap-2 rounded-lg text-control text-link underline-offset-4 transition-colors hover:text-fg hover:underline md:text-control-wide"
+            href={installUrl}
+          >
+            Update GitHub App access
+            <ExternalLink aria-hidden="true" className="size-4 shrink-0" />
+          </a>
+        )}
       </header>
 
-      <div className="bg-neutral-900/60 border border-neutral-800/80 rounded-xl p-4 sm:p-5">
-        <InstallationPicker />
-      </div>
+      <InstallationPicker showReviewMode showSettingsLink />
 
       {installations?.length === 0 && (
         <OnboardingEmptyState onContinue={() => void loginWithGitHub('/repos')} />
       )}
-
-      {selected && !selected.suspended && (
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-neutral-900/40 border border-neutral-800/60 rounded-xl p-3 sm:p-4">
-            <div className="flex-1 max-w-md">
-              <SearchInput
-                aria-label="Search repositories"
-                placeholder="Search repositories…"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-              />
-            </div>
-            <div className="flex items-center gap-4 text-xs font-mono">
-              <button
-                type="button"
-                className="text-primary-400 hover:text-primary-300 underline underline-offset-2 cursor-pointer font-medium"
-                onClick={state.refresh}
-              >
-                Refresh repositories
-              </button>
-            </div>
-          </div>
-
-          <AsyncState {...state} hasData={!!state.data} />
-
-          {state.data?.length === 0 && (
-            <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-8 text-center space-y-2">
-              <p className="text-neutral-300 font-medium">No accessible repositories.</p>
-              <p className="text-sm text-neutral-400">Update the GitHub App's repository selection, then refresh.</p>
-            </div>
-          )}
-
-          {!!state.data?.length && !state.data.some(r => r.full_name.toLowerCase().includes(search.toLowerCase())) && (
-            <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-8 text-center text-neutral-400">
-              No repositories match your search.
-            </div>
-          )}
-
-          <div className="grid gap-3">
-            {state.data
-              ?.filter(r => r.full_name.toLowerCase().includes(search.toLowerCase()))
-              .map(r => (
-                <article
-                  key={r.id}
-                  className="bg-neutral-900/80 hover:bg-neutral-850/80 border border-neutral-800 hover:border-neutral-700/80 rounded-xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-150 shadow-2xs group"
-                >
-                  <div className="space-y-2">
-                    <h2 className="flex items-center gap-2 font-mono font-semibold text-base">
-                      {r.private ? (
-                        <span className="p-1 rounded bg-neutral-800 text-neutral-400" title="Private repository">
-                          <Lock size={14} aria-label="Private" />
-                        </span>
-                      ) : (
-                        <span className="p-1 rounded bg-neutral-800 text-neutral-400" title="Public repository">
-                          <Globe size={14} aria-label="Public" />
-                        </span>
-                      )}
-                      <Link
-                        className="text-neutral-100 group-hover:text-primary-400 transition-colors"
-                        to={repoUrl(selected.id, r.full_name)}
-                      >
-                        {r.full_name}
-                      </Link>
-                    </h2>
-                    <p className="text-xs text-neutral-400 flex flex-wrap items-center gap-2 font-mono">
-                      <span className="inline-flex items-center gap-1 text-neutral-300">
-                        <GitBranch size={13} className="text-neutral-500" />
-                        {r.default_branch}
-                      </span>
-                      <span className="text-neutral-600">·</span>
-                      <span>{r.open_issues_count} open issues / PRs</span>
-                      <span className="text-neutral-600">·</span>
-                      <span className="px-1.5 py-0.5 rounded text-[11px] bg-primary-500/10 text-primary-300 border border-primary-500/20">
-                        {selected.review_mode}
-                      </span>
-                    </p>
-                  </div>
-                  <Link
-                    className="inline-flex items-center gap-1.5 text-primary-400 hover:text-primary-300 font-medium text-sm self-start sm:self-center transition-colors group-hover:translate-x-0.5 motion-safe:transition-transform"
-                    to={repoUrl(selected.id, r.full_name)}
-                  >
-                    View pull requests →
-                  </Link>
-                </article>
-              ))}
-          </div>
-        </div>
+      {!!installations?.length && !selected && (
+        <p className="text-support text-fg-muted">Choose an installation to see its repositories.</p>
+      )}
+      {user && selected && !selected.suspended && (
+        <RepositoryList key={`${user.id}:${selected.id}`} installationId={selected.id} userId={user.id} />
       )}
     </div>
   );

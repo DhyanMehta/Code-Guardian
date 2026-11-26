@@ -17,7 +17,7 @@ describe('Tabs component', () => {
     { id: 'settings', label: 'Settings' },
   ];
 
-  it('renders tab list and highlights active tab with Primary color class', () => {
+  it('renders the tab list with the active link color and selected surface', () => {
     const handleChange = vi.fn();
     render(
       <Tabs
@@ -30,7 +30,7 @@ describe('Tabs component', () => {
     const pullsTab = screen.getByRole('tab', { name: /pulls/i });
     expect(pullsTab).toBeInTheDocument();
     expect(pullsTab).toHaveAttribute('aria-selected', 'true');
-    expect(pullsTab).toHaveClass('text-primary-400');
+    expect(pullsTab).toHaveClass('text-link', 'bg-panel-raised');
     expect(screen.getByText('3')).toBeInTheDocument();
   });
 

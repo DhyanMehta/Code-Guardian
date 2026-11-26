@@ -1,6 +1,6 @@
 import React, { ButtonHTMLAttributes } from 'react';
 
-export type ButtonVariant = 'primary' | 'secondary' | 'inverted' | 'outlined' | 'github';
+export type ButtonVariant = 'primary' | 'secondary' | 'quiet' | 'destructive' | 'inverted' | 'outlined' | 'github';
 export type ButtonSize = 'sm' | 'md' | 'lg';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -11,21 +11,25 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const variantStyles: Record<ButtonVariant, string> = {
   github:
-    'bg-[#24292f] hover:bg-[#2d333b] active:bg-[#1f242c] text-white border border-[#444c56] shadow-xs disabled:opacity-50 disabled:cursor-not-allowed',
+    'bg-[#24292f] enabled:hover:bg-[#2d333b] enabled:active:bg-[#1f242c] text-white border-[#444c56]',
   primary:
-    'bg-primary-600 hover:bg-primary-500 active:bg-primary-700 text-neutral-white border border-primary-500/30 shadow-xs hover:shadow-primary-500/20 disabled:bg-primary-950 disabled:text-neutral-500 disabled:border-transparent disabled:cursor-not-allowed',
+    'bg-action enabled:hover:bg-action-hover enabled:active:bg-action-hover text-action-foreground border-action',
   secondary:
-    'bg-neutral-800 hover:bg-neutral-750 hover:bg-neutral-700 active:bg-neutral-850 text-neutral-100 border border-neutral-700/80 shadow-xs disabled:bg-neutral-900 disabled:text-neutral-600 disabled:cursor-not-allowed',
+    'bg-action-secondary enabled:hover:bg-action-secondary-hover enabled:active:bg-action-secondary-hover text-fg border-control-border',
+  quiet:
+    'bg-transparent enabled:hover:bg-action-secondary-hover enabled:active:bg-action-secondary-hover text-fg-secondary border-transparent',
+  destructive:
+    'bg-action-danger enabled:hover:bg-action-danger-hover enabled:active:bg-action-danger-hover text-risk-critical border-risk-critical/70',
   inverted:
-    'bg-neutral-100 hover:bg-neutral-white active:bg-neutral-200 text-neutral-950 font-semibold border border-transparent shadow-xs disabled:bg-neutral-400 disabled:text-neutral-700 disabled:cursor-not-allowed',
+    'bg-neutral-100 enabled:hover:bg-neutral-white enabled:active:bg-neutral-200 text-neutral-950 border-transparent',
   outlined:
-    'bg-transparent hover:bg-neutral-800/80 active:bg-neutral-800 text-neutral-200 border border-neutral-700 hover:border-neutral-600 shadow-xs disabled:border-neutral-850 disabled:text-neutral-600 disabled:cursor-not-allowed',
+    'bg-transparent enabled:hover:bg-action-secondary-hover enabled:active:bg-action-secondary-hover text-fg-secondary border-control-border',
 };
 
 const sizeStyles: Record<ButtonSize, string> = {
-  sm: 'px-3 py-1.5 text-xs font-medium gap-1.5 rounded-md',
-  md: 'px-4 py-2 text-sm font-medium gap-2 rounded-lg',
-  lg: 'px-5 py-2.5 text-base font-semibold gap-2.5 rounded-lg',
+  sm: 'px-3 py-1.5 gap-1.5',
+  md: 'px-4 py-2 gap-2',
+  lg: 'px-5 py-2.5 gap-2.5',
 };
 
 export const Button: React.FC<ButtonProps> = ({
@@ -42,12 +46,13 @@ export const Button: React.FC<ButtonProps> = ({
     <button
       type={type}
       disabled={disabled || isLoading}
-      className={`inline-flex items-center justify-center transition-all duration-150 motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas cursor-pointer select-none font-sans font-medium tracking-wide ${variantStyles[variant]} ${sizeStyles[size]} ${className}`}
+      className={`control-target control-focus inline-flex items-center justify-center rounded-lg border text-center font-sans text-control md:text-control-wide transition-colors duration-100 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${variantStyles[variant]} ${sizeStyles[size]} ${className}`}
       {...props}
+      aria-busy={isLoading || props['aria-busy']}
     >
       {isLoading ? (
         <>
-          <span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full motion-safe:animate-spin inline-block shrink-0" />
+          <span aria-hidden="true" className="size-3.5 shrink-0 rounded-full border-2 border-current border-t-transparent motion-safe:animate-spin" />
           <span>{children}</span>
         </>
       ) : (

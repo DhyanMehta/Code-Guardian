@@ -1,133 +1,158 @@
-import { useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { ApiError, errorMessage, transient } from '../../api/client';
+import type { ReviewDetail, ReviewItem } from '../../api/contracts';
 import { endpoints } from '../../api/endpoints';
-import { agents, type ReviewDetail } from '../../api/contracts';
+import { activeReview } from '../../api/identity';
 import { useResource } from '../../api/resources';
-import { AsyncState } from '../common/AsyncState';
-import { AgentRunCard, agentLabels, panelClass } from '../reviews/ReviewPresentation';
-import { errorMessage } from '../../api/client';
+import { Button } from '../common/Button';
+import { FriendlyTimestamp } from '../common/FriendlyTimestamp';
+import { ScopedRefreshStatus } from '../common/ScopedRefreshStatus';
+import { SectionCard } from '../common/SectionCard';
+import { StatusBadge } from '../common/StatusBadge';
+import { diagnosticError, diagnosticText } from '../reviews/diagnosticText';
+import { AgentHistoryRecord, HistoryReviewLink } from './AgentHistoryRecord';
 import { AgentOutcomeChart } from './AgentOutcomeChart';
+
+const PAGE_SIZE = 5;
+const HISTORY_LIMIT = 200;
+
 export type AgentHistoryCache = Map<number, { detail: ReviewDetail; fetched: number }>;
-export async function agentHistory(installation: number, repo: string, count: number, signal: AbortSignal, cache: AgentHistoryCache = new Map()) {
-  const list = await endpoints.reviews(installation, repo, signal, count);
-  const results: { id: number; detail?: ReviewDetail; error?: string }[] = new Array(list.items.length);
+interface HistoryRecord { id: number; item: ReviewItem; detail?: ReviewDetail; error?: string }
+interface DetailProgress { checked: number; total: number }
+
+export async function agentHistory(
+  installation: number, repo: string, count: number, signal: AbortSignal,
+  cache: AgentHistoryCache = new Map(), onProgress?: (progress: DetailProgress) => void,
+) {
+  const list = await endpoints.reviews(installation, repo, signal, count).catch(error => {
+    if (!signal.aborted && error instanceof ApiError && [401, 403].includes(error.status)) cache.clear();
+    throw error;
+  });
+  signal.throwIfAborted();
+  const results: HistoryRecord[] = new Array(list.items.length);
   let cursor = 0;
+  let checked = 0;
+  onProgress?.({ checked, total: results.length });
   await Promise.all([0, 1].map(async () => {
     while (cursor < list.items.length && !signal.aborted) {
-      const index = cursor++, id = list.items[index].id;
+      const index = cursor++;
+      const item = list.items[index];
+      const id = item.id;
       try {
         const cached = cache.get(id);
-        const active = cached && ['pending','running'].includes(cached.detail.status);
-        const detail = cached && cached.detail.status === list.items[index].status && Date.now() - cached.fetched < (active ? 5_000 : 30_000) ? cached.detail : await endpoints.review(id, signal);
-        if (!cached || cached.detail !== detail) cache.set(id, { detail, fetched: Date.now() });
-        results[index] = { id, detail };
+        const active = cached && activeReview(cached.detail.status);
+        const detail = cached && cached.detail.status === item.status && Date.now() - cached.fetched < (active ? 5_000 : 30_000)
+          ? cached.detail : await endpoints.review(id, signal);
+        signal.throwIfAborted();
+        if (cached?.detail !== detail) cache.set(id, { detail, fetched: Date.now() });
+        results[index] = { id, item, detail };
+      } catch (error) {
+        if (signal.aborted) throw error;
+        cache.delete(id);
+        results[index] = { id, item, error: diagnosticText(errorMessage(error)) };
       }
-      catch (e) { if (signal.aborted) throw e; results[index] = { id, error: errorMessage(e) }; }
+      checked++;
+      onProgress?.({ checked, total: results.length });
     }
   }));
+  signal.throwIfAborted();
   return { results, total: list.total };
 }
-export function AgentsTab({ scope, installation, repo }: { scope: string; installation: number; repo: string }) {
-  const [count, setCount] = useState(5);
+
+interface HistoryScope { scope: string; installation: number; repo: string }
+
+export function AgentsTab(props: HistoryScope) {
+  return <ScopedAgentsTab key={props.scope} {...props} />;
+}
+
+function ScopedAgentsTab({ scope, installation, repo }: HistoryScope) {
+  const [count, setCount] = useState(PAGE_SIZE);
+  const [detailProgress, setDetailProgress] = useState<DetailProgress | null>(null);
   const cache = useRef<AgentHistoryCache>(new Map());
-  const state = useResource(`${scope}:agents:${count}`, s => agentHistory(installation, repo, count, s, cache.current), data => data.results.some(r=>r.detail && ['pending','running'].includes(r.detail.status)) ? 5_000 : 30_000);
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-neutral-800/60">
-        <div>
-          <h2 className="text-base font-semibold text-neutral-100">Specialist Agent Fleet</h2>
-          <p className="text-xs text-neutral-400">Autonomous multi-agent execution statistics, health metrics, and history.</p>
-        </div>
-        <button
-          type="button"
-          onClick={() => { cache.current.clear(); state.refresh(); }}
-          className="text-xs font-mono font-medium text-primary-400 hover:text-primary-300 underline underline-offset-2 cursor-pointer self-start sm:self-auto"
-        >
-          Refresh agent history
-        </button>
+  const historyHeading = useRef<HTMLHeadingElement>(null);
+  const restoreRetryFocus = useRef(false);
+  const lastSample = useRef<{ data: Awaited<ReturnType<typeof agentHistory>>; updatedAt?: number; count: number }>(null);
+  const state = useResource(`${scope}:agents:${count}`, signal => {
+    setDetailProgress(null);
+    return agentHistory(installation, repo, count, signal, cache.current, setDetailProgress);
+  },
+    data => data.results.some(r => r.detail && activeReview(r.detail.status)) ? 5_000 : 30_000);
+  const mayRetain = !state.error || transient(state.error);
+  useEffect(() => {
+    if (state.data) lastSample.current = { data: state.data, updatedAt: state.updatedAt, count };
+    else if (!mayRetain) lastSample.current = null;
+  }, [state.data, state.updatedAt, mayRetain, count]);
+
+  const previous = mayRetain ? lastSample.current : null;
+  const data = state.data ?? previous?.data;
+  const continuing = !state.data && !!previous && previous.count < count;
+  const canLoadMore = !!data && data.total > count && count < HISTORY_LIMIT;
+  const details = data?.results.flatMap(record => record.detail ? [record.detail] : []) ?? [];
+  const unavailable = data ? data.results.length - details.length : 0;
+  useEffect(() => {
+    if (!unavailable && restoreRetryFocus.current) {
+      restoreRetryFocus.current = false;
+      if (document.activeElement === document.body) historyHeading.current?.focus();
+    }
+  }, [unavailable]);
+  const refresh = () => { cache.current.clear(); state.refresh(); };
+
+  return <div className="min-w-0 space-y-5 text-fg">
+    <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+      <div>
+        <h2 className="text-page md:text-page-wide">Agent History</h2>
+        <p className="text-support text-fg-muted">Recorded specialist outcomes and execution evidence from saved reviews.</p>
+        <ScopedRefreshStatus sources={[{
+          ...state, label: 'Agent history', hasData: !!data, updatedAt: state.updatedAt ?? previous?.updatedAt,
+          error: diagnosticError(state.error),
+        }]} />
       </div>
-
-      <AsyncState {...state} hasData={!!state.data} />
-
-      {state.data && (
-        <div className="space-y-6">
-          <AgentOutcomeChart
-            reviews={state.data.results.flatMap(r => r.detail ? [r.detail] : [])}
-            unavailable={state.data.results.filter(r => !r.detail).length}
-          />
-
-          <div className="grid sm:grid-cols-2 gap-3">
-            {agents.map(a => {
-              const failed = state.data?.results.find(r =>
-                r.detail?.agent_runs.some(run => run.agent === a && (run.coverage?.status === 'partial' || ['failed', 'degraded'].includes(run.outcome ?? '')))
-              );
-              return (
-                <div key={a} className={panelClass}>
-                  <h3 className="font-semibold text-sm text-neutral-100">{agentLabels[a]}</h3>
-                  <p className="text-xs font-mono text-neutral-400 mt-1">
-                    Latest recorded issue in loaded history:{' '}
-                    {failed ? (
-                      <Link className="text-primary-400 hover:underline font-semibold" to={`/reviews/${failed.id}`}>
-                        review #{failed.id}
-                      </Link>
-                    ) : (
-                      'None found; missing history does not establish complete coverage.'
-                    )}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-
-          {!state.data.results.length && (
-            <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-8 text-center text-neutral-400">
-              <p>No review history yet.</p>
+      <Button variant="secondary" aria-busy={state.loading || undefined} onClick={refresh}>
+        <RefreshCw aria-hidden="true" className="size-4" />Refresh agent history
+      </Button>
+    </header>
+    {state.loading && !data && <p className="text-support text-fg-muted">{detailProgress
+      ? `Checking saved review details · ${detailProgress.checked} of ${detailProgress.total} checked.`
+      : 'Reading the history list…'}</p>}
+    {data && <>
+      <AgentOutcomeChart reviews={details} unavailable={unavailable} total={data.total} />
+      <section aria-labelledby="execution-history" className="space-y-3">
+        <h3 id="execution-history" ref={historyHeading} tabIndex={-1} className="text-section control-focus">Execution history</h3>
+        {!data.results.length && <SectionCard><p className="text-support text-fg-muted">No review history yet.</p></SectionCard>}
+        {unavailable > 0 && <div className="flex flex-wrap items-center gap-x-3">
+          <p className="text-support text-status-degraded">{unavailable} {unavailable === 1 ? 'review detail unavailable' : 'review details unavailable'}.</p>
+          <Button variant="secondary" size="sm" aria-busy={state.loading || undefined} onClick={event => {
+            restoreRetryFocus.current = document.activeElement === event.currentTarget;
+            state.refresh();
+          }}>Retry unavailable details</Button>
+        </div>}
+        {data.results.map(record => record.detail ? <AgentHistoryRecord key={record.id} review={record.detail} /> :
+          <SectionCard key={record.id}>
+            <div className="flex flex-wrap items-center gap-2">
+              <h4 className="text-row-title">Review #{record.id} · PR #{record.item.pr_number}</h4>
+              <StatusBadge status={record.item.status} />
             </div>
-          )}
-
-          <div className="space-y-4">
-            {state.data.results.map(r => (
-              <section key={r.id} className="rounded-xl border border-neutral-800/80 bg-neutral-900/50 p-5 space-y-3">
-                <div className="flex items-center justify-between pb-2 border-b border-neutral-800/60">
-                  <h3 className="font-mono text-sm font-semibold">
-                    <Link className="text-primary-400 hover:text-primary-300 hover:underline" to={`/reviews/${r.id}`}>
-                      Review #{r.id}
-                    </Link>
-                  </h3>
-                </div>
-
-                {r.error ? (
-                  <p role="alert" className="text-xs text-severity-critical">
-                    Detail unavailable: {r.error}
-                  </p>
-                ) : (
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    {r.detail?.agent_runs.map(run => (
-                      <AgentRunCard key={run.agent} run={run} />
-                    ))}
-                  </div>
-                )}
-              </section>
-            ))}
-          </div>
-
-          {state.data.total > count && count < 200 && (
-            <div className="text-center pt-2">
-              <button
-                type="button"
-                className="text-xs font-mono text-primary-400 hover:text-primary-300 underline cursor-pointer"
-                onClick={() => setCount(n => Math.min(n + 5, 200))}
-              >
-                Load more agent history
-              </button>
-            </div>
-          )}
-
-          {count === 200 && state.data.total > count && (
-            <p className="text-xs font-mono text-center text-neutral-400">Showing the latest 200 reviews.</p>
-          )}
-        </div>
-      )}
-    </div>
-  );
+            <FriendlyTimestamp kind="event" value={record.item.created_at} label="Created" />
+            <p className="text-support text-status-degraded [overflow-wrap:anywhere]">Detail unavailable · {record.error}</p>
+            <HistoryReviewLink id={record.id} pr={record.item.pr_number} />
+          </SectionCard>)}
+        {(canLoadMore || count > PAGE_SIZE) && <Button
+          variant="secondary"
+          aria-busy={(continuing && state.loading) || undefined}
+          aria-disabled={state.loading || !canLoadMore || continuing || undefined}
+          onClick={() => { if (canLoadMore && !state.loading && !continuing) setCount(n => Math.min(n + PAGE_SIZE, HISTORY_LIMIT)); }}
+        >
+          {continuing || canLoadMore ? 'Load older reviews' : data.total > count ? 'History limit reached' : 'All available reviews loaded'}
+        </Button>}
+        {continuing && state.loading && <>
+          <p role="status" className="text-support text-fg-muted">Loading older review details…</p>
+          {detailProgress && <p className="text-meta text-fg-muted">{detailProgress.checked} of {detailProgress.total} details checked</p>}
+        </>}
+        {count === HISTORY_LIMIT && data.total > count && !continuing && (
+          <p className="text-support text-fg-muted">This view is limited to the latest {HISTORY_LIMIT} review records.</p>
+        )}
+      </section>
+    </>}
+  </div>;
 }

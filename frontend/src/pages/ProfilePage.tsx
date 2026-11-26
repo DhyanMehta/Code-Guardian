@@ -1,135 +1,120 @@
-import { useEffect, useState } from 'react';
-import { useAuth } from '../context/AuthContext';
-import { endpoints } from '../api/endpoints';
+import { useState } from 'react';
 import { request } from '../api/client';
-import { parseProfileMode, type ReviewMode } from '../api/contracts';
+import { parseProfileMode, type ReviewMode, type UserProfile } from '../api/contracts';
+import { endpoints } from '../api/endpoints';
 import { invalidateResources, useResource } from '../api/resources';
 import { useWrite } from '../api/writes';
-import { AsyncState } from '../components/common/AsyncState';
-import { WriteFeedback } from '../components/common/WriteFeedback';
 import { Button } from '../components/common/Button';
-export function ProfilePage() {
-  const {user} = useAuth();
-  const state = useResource(user ? `u:${user.id}:profile-mode` : null, endpoints.profileMode);
-  const write = useWrite(`u:${user!.id}:profile-mode-write`);
-  const [mode,setMode] = useState<ReviewMode | ''>('');
-  const [saved,setSaved] = useState<string | null>(null);
-  useEffect(() => { if (state.updatedAt && write.uncertain) write.reconcile(); }, [state.updatedAt]);
-  useEffect(() => { setMode(state.data?.review_mode === 'auto' || state.data?.review_mode === 'manual' ? state.data.review_mode : ''); }, [state.data?.version]);
+import { ScopedRefreshStatus } from '../components/common/ScopedRefreshStatus';
+import { SectionCard } from '../components/common/SectionCard';
+import { WriteFeedback } from '../components/common/WriteFeedback';
+import { diagnosticError, diagnosticText } from '../components/reviews/diagnosticText';
+import { useAuth } from '../context/AuthContext';
+
+const modeLabels = { auto: 'Automatic', manual: 'Manual', mixed: 'Mixed' } as const;
+
+function PolicyEditor({ user }: { user: UserProfile }) {
+  const state = useResource(`u:${user.id}:profile-mode`, endpoints.profileMode);
+  const write = useWrite(`u:${user.id}:profile-mode-write`);
+  const [draft, setDraft] = useState<{ mode: ReviewMode; version: string } | null>(null);
+  const [receipt, setReceipt] = useState<{ previousVersion: string; savedVersion: string; message: string } | null>(null);
+  const current = state.data;
+  const persisted = current?.review_mode;
+  const mode = draft && draft.version === current?.version ? draft.mode : persisted === 'auto' || persisted === 'manual' ? persisted : '';
+  const count = current?.installations.length ?? 0;
+  const canApply = !!(current && count && mode && mode !== persisted && !write.busy && !write.uncertain && !state.loading && !state.error);
+  const saved = receipt && current && [receipt.previousVersion, receipt.savedVersion].includes(current.version) ? receipt.message : null;
+
   const save = async () => {
-    setSaved(null);
-    const result = await write.run(() => request('/profile/review-mode',parseProfileMode,{method:'PATCH',body:{review_mode:mode,version:state.data!.version}}), () => invalidateResources(`u:${user!.id}:`));
-    if (result) setSaved(`Saved ${result.review_mode === 'auto' ? 'Automatic' : 'Manual'} for ${result.installations.length} administered installation${result.installations.length === 1 ? '' : 's'}.`);
+    if (!canApply || !current || !mode) return;
+    setReceipt(null);
+    const result = await write.run(() => request('/profile/review-mode', parseProfileMode, {
+      method: 'PATCH', body: { review_mode: mode, version: current.version },
+    }), () => invalidateResources(`u:${user.id}:`));
+    setDraft(null);
+    if (result?.review_mode === 'auto' || result?.review_mode === 'manual') {
+      const total = result.installations.length;
+      setReceipt({
+        previousVersion: current.version, savedVersion: result.version,
+        message: `Saved ${modeLabels[result.review_mode]} for ${total} administered installation${total === 1 ? '' : 's'}.`,
+      });
+    }
   };
-  return (
-    <div className="max-w-3xl space-y-6">
-      <header className="border-b border-neutral-800/80 pb-5">
-        <h1 className="text-2xl font-bold tracking-tight text-neutral-100">Profile settings</h1>
-        <p className="text-sm text-neutral-400 mt-1 font-mono">
-          Signed in as <span className="text-neutral-200 font-semibold">{user?.github_login}</span>
-        </p>
-      </header>
 
-      <section className="rounded-xl border border-neutral-800/90 bg-neutral-900/80 p-6 space-y-5 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800/60">
-          <div>
-            <h2 className="text-lg font-semibold text-neutral-100">Review automation</h2>
-            <p className="text-xs text-neutral-400 mt-0.5">
-              Apply one mode to all active installations you administer. This policy is shared with their other users and applies to every selected repository.
-            </p>
+  const list = current?.installations ?? [];
+  const installationRow = (item: typeof list[number]) => <li key={item.id} className="flex flex-wrap justify-between gap-x-3 border-b border-divider py-2 text-support">
+    <span className="min-w-0 font-semibold [overflow-wrap:anywhere]">{item.account_login}</span>
+    <span className="text-fg-muted">{modeLabels[item.review_mode]}</span>
+  </li>;
+  return <section aria-labelledby="shared-automation" className="space-y-4">
+    <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+      <div>
+        <h2 id="shared-automation" className="text-section md:text-section-wide">Review automation</h2>
+        <p className="mt-1 text-support text-fg-muted">Shared policy for active GitHub installations you administer.</p>
+        <ScopedRefreshStatus sources={[{ ...state, label: 'Review policy', hasData: !!current, error: diagnosticError(state.error) }]} />
+      </div>
+      <Button variant="secondary" aria-busy={state.loading || undefined} onClick={state.refresh}>Refresh review policy</Button>
+    </header>
+
+    {current && (count ? <>
+      <div className="grid items-start gap-4 lg:grid-cols-[7fr_5fr]">
+        <SectionCard className="space-y-3">
+          <h3 className="text-row-title">Shared policy</h3>
+          <p className="text-support">Current policy <strong>{persisted ? modeLabels[persisted] : 'Unavailable'}</strong></p>
+          {persisted === 'mixed' && <p className="text-support text-status-degraded">Your installations currently use different modes. Choose one to apply across the list.</p>}
+          <label htmlFor="draft-review-mode" className="block text-control">Review mode</label>
+          <select id="draft-review-mode" aria-describedby="review-mode-help" disabled={write.busy || write.uncertain}
+            value={mode} className="control-target control-focus w-full rounded-lg border border-control-border bg-panel-inset px-3 text-control sm:max-w-xs"
+            onChange={event => {
+              setReceipt(null);
+              if (write.error) write.reconcile();
+              setDraft({ mode: event.target.value as ReviewMode, version: current.version });
+            }}>
+            <option value="" disabled>Choose a mode</option>
+            <option value="auto">Automatic</option>
+            <option value="manual">Manual</option>
+          </select>
+          <div id="review-mode-help" className="space-y-1 text-support text-fg-secondary">
+            <p><strong>Automatic</strong> queues a review for eligible new PR events.</p>
+            <p><strong>Manual</strong> lets authorized users start a review from a pull request.</p>
           </div>
-          <button
-            type="button"
-            className="text-xs font-mono font-medium text-primary-400 hover:text-primary-300 underline underline-offset-2 cursor-pointer self-start sm:self-auto"
-            onClick={state.refresh}
-          >
-            Refresh review policy
-          </button>
-        </div>
+        </SectionCard>
+        <SectionCard className="space-y-2">
+          <h3 className="text-row-title">Affected installations ({count})</h3>
+          <p className="text-support text-fg-muted">Current mode for each administered installation.</p>
+          <ul aria-label="Affected installations">{list.slice(0, 5).map(installationRow)}</ul>
+          {count > 5 && <details>
+            <summary className="control-target control-focus w-fit cursor-pointer content-center rounded text-control text-link">Show {count - 5} more installations</summary>
+            <ul aria-label="Additional affected installations">{list.slice(5).map(installationRow)}</ul>
+          </details>}
+        </SectionCard>
+      </div>
+      <SectionCard className="space-y-3">
+        <p className="max-w-prose text-support text-fg-secondary">Applying this policy affects other users and all selected repositories in these installations. Queued reviews still finish. Newly connected installations keep their own policy until a later apply.</p>
+        {mode && mode === persisted && <p className="text-support text-fg-muted">This mode is already applied to every affected installation.</p>}
+        <Button disabled={!canApply} aria-busy={write.busy || undefined} onClick={() => void save()}>
+          Apply to {count} {count === 1 ? 'installation' : 'installations'}
+        </Button>
+      </SectionCard>
+    </> : <SectionCard><p className="text-support">You do not administer any active installations. Their administrators control review automation.</p></SectionCard>)}
 
-        <AsyncState {...state} hasData={!!state.data} />
+    <WriteFeedback {...write} error={write.error && diagnosticText(write.error)} success={saved}
+      canReconcile={!!current && !!state.updatedAt && !state.loading && !state.error} busyMessage="Saving shared policy…" />
+  </section>;
+}
 
-        {state.data && (
-          <>
-            {state.data.installations.length ? (
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <p className="text-xs font-mono uppercase tracking-wider text-neutral-400">
-                    Administered Installations ({state.data.installations.length})
-                  </p>
-                  <ul className="space-y-2 font-mono text-xs">
-                    {state.data.installations.map(i => (
-                      <li
-                        key={i.id}
-                        className="flex items-center justify-between p-3 rounded-lg bg-neutral-950/60 border border-neutral-800/80"
-                      >
-                        <span className="font-semibold text-neutral-200">{i.account_login}</span>
-                        <span
-                          className={`px-2 py-0.5 rounded text-[11px] font-medium ${
-                            i.review_mode === 'auto'
-                              ? 'bg-primary-500/15 text-primary-300 border border-primary-500/30'
-                              : 'bg-neutral-800 text-neutral-300 border border-neutral-700'
-                          }`}
-                        >
-                          {i.review_mode === 'auto' ? 'Automatic' : 'Manual'}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                {state.data.review_mode === 'mixed' && (
-                  <div className="p-3 rounded-lg bg-severity-medium-bg border border-severity-medium-border text-xs text-severity-medium font-medium">
-                    <p role="status">Installations currently use different modes. Choose a mode to align them.</p>
-                  </div>
-                )}
-
-                <div className="pt-2 border-t border-neutral-800/60 space-y-3">
-                  <label className="block text-sm space-y-2">
-                    <span className="font-medium text-neutral-200">Review mode</span>
-                    <select
-                      aria-label="Review mode"
-                      className="block w-full sm:w-64 bg-neutral-950 border border-neutral-700/80 hover:border-neutral-600 rounded-lg p-2.5 text-sm text-neutral-100 font-sans focus:outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-400 cursor-pointer"
-                      value={mode}
-                      disabled={write.busy || write.uncertain}
-                      onChange={e => setMode(e.target.value as ReviewMode)}
-                    >
-                      <option value="" disabled>Choose a mode</option>
-                      <option value="auto">Automatic</option>
-                      <option value="manual">Manual</option>
-                    </select>
-                  </label>
-
-                  <p className="text-xs text-neutral-400 leading-relaxed">
-                    Automatic: new eligible PR events queue a review. Manual: use the review button on a PR. Existing queued reviews still finish. Newly connected installations retain their current policy until you apply this setting again.
-                  </p>
-
-                  <div className="pt-2">
-                    <Button
-                      disabled={!mode || mode === state.data.review_mode || write.busy || write.uncertain || state.loading}
-                      onClick={() => void save()}
-                    >
-                      {write.busy ? 'Saving shared policy…' : 'Apply to all administered installations'}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-6 text-center text-neutral-400 text-sm">
-                <p>You do not administer any active installations. Their administrators control review automation.</p>
-              </div>
-            )}
-          </>
-        )}
-
-        <WriteFeedback {...write} />
-
-        {saved && (
-          <div className="p-3.5 rounded-lg bg-tertiary-950/40 border border-tertiary-500/40 text-xs font-mono text-tertiary-400">
-            <p role="status">{saved}</p>
-          </div>
-        )}
-      </section>
-    </div>
-  );
+export function ProfilePage() {
+  const { user } = useAuth();
+  if (!user) return null;
+  return <div className="space-y-6 text-fg">
+    <h1 className="text-page md:text-page-wide">Profile settings</h1>
+    <SectionCard className="flex items-center gap-4">
+      {user.avatar_url && <img src={user.avatar_url} alt="" className="size-12 shrink-0 rounded-full" />}
+      <div className="min-w-0 [overflow-wrap:anywhere]">
+        <h2 className="text-row-title">{user.github_login}</h2>
+        <p className="text-support text-fg-muted">Signed in with GitHub</p>
+      </div>
+    </SectionCard>
+    <PolicyEditor key={user.id} user={user} />
+  </div>;
 }

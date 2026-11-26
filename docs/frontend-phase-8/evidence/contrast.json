@@ -1,0 +1,355 @@
+{
+  "method": "WCAG relative luminance of unique measured RGB text and opaque background pairs. Sampling omits gradients and transient and platform-native states.",
+  "pairs": [
+    {
+      "colors": "rgb(255, 255, 255) on rgb(79, 70, 229)",
+      "ratio": 6.29,
+      "examples": [
+        "repositories",
+        "pulls",
+        "review-overview",
+        "public-landing",
+        "callback",
+        "installation-return",
+        "findings",
+        "coverage",
+        "execution",
+        "report",
+        "proposal"
+      ]
+    },
+    {
+      "colors": "rgb(165, 180, 252) on rgb(24, 34, 56)",
+      "ratio": 7.95,
+      "examples": [
+        "repositories",
+        "pulls",
+        "analytics",
+        "agent-history",
+        "specialist-summary",
+        "historical-scanner-evidence",
+        "exact-history"
+      ]
+    },
+    {
+      "colors": "rgb(252, 165, 165) on rgb(56, 24, 32)",
+      "ratio": 8.38,
+      "examples": [
+        "proposal"
+      ]
+    },
+    {
+      "colors": "rgb(170, 184, 202) on rgb(16, 24, 39)",
+      "ratio": 8.81,
+      "examples": [
+        "pulls",
+        "analytics",
+        "agent-history",
+        "review-overview",
+        "installation-settings",
+        "profile",
+        "onboarding",
+        "findings",
+        "coverage",
+        "execution",
+        "report",
+        "proposal",
+        "specialist-summary",
+        "historical-scanner-evidence",
+        "exact-history"
+      ]
+    },
+    {
+      "colors": "rgb(165, 180, 252) on rgb(16, 24, 39)",
+      "ratio": 8.91,
+      "examples": [
+        "pulls",
+        "analytics",
+        "agent-history",
+        "review-overview",
+        "installation-settings",
+        "installation-return",
+        "findings",
+        "coverage",
+        "execution",
+        "report",
+        "proposal",
+        "specialist-summary",
+        "historical-scanner-evidence",
+        "exact-history"
+      ]
+    },
+    {
+      "colors": "rgb(170, 184, 202) on rgb(12, 19, 32)",
+      "ratio": 9.22,
+      "examples": [
+        "agent-history",
+        "specialist-summary",
+        "historical-scanner-evidence"
+      ]
+    },
+    {
+      "colors": "rgb(203, 213, 225) on rgb(32, 41, 74)",
+      "ratio": 9.57,
+      "examples": [
+        "proposal"
+      ]
+    },
+    {
+      "colors": "rgb(170, 184, 202) on rgb(9, 13, 22)",
+      "ratio": 9.64,
+      "examples": [
+        "repositories",
+        "pulls",
+        "analytics",
+        "agent-history",
+        "review-overview",
+        "installation-settings",
+        "profile",
+        "public-landing",
+        "callback",
+        "installation-return",
+        "onboarding",
+        "findings",
+        "coverage",
+        "execution",
+        "report",
+        "proposal",
+        "specialist-summary",
+        "historical-scanner-evidence",
+        "exact-history"
+      ]
+    },
+    {
+      "colors": "rgb(165, 180, 252) on rgb(9, 13, 22)",
+      "ratio": 9.75,
+      "examples": [
+        "repositories",
+        "pulls",
+        "analytics",
+        "agent-history",
+        "review-overview",
+        "installation-settings",
+        "findings",
+        "coverage",
+        "execution",
+        "report",
+        "proposal",
+        "specialist-summary",
+        "historical-scanner-evidence",
+        "exact-history"
+      ]
+    },
+    {
+      "colors": "rgb(253, 164, 175) on rgb(12, 19, 32)",
+      "ratio": 9.83,
+      "examples": [
+        "agent-history",
+        "specialist-summary",
+        "historical-scanner-evidence"
+      ]
+    },
+    {
+      "colors": "rgb(203, 213, 225) on rgb(24, 34, 56)",
+      "ratio": 10.68,
+      "examples": [
+        "repositories",
+        "pulls",
+        "analytics",
+        "agent-history",
+        "specialist-summary",
+        "historical-scanner-evidence",
+        "exact-history"
+      ]
+    },
+    {
+      "colors": "rgb(253, 230, 138) on rgb(51, 44, 23)",
+      "ratio": 11.14,
+      "examples": [
+        "callback",
+        "onboarding"
+      ]
+    },
+    {
+      "colors": "rgb(203, 213, 225) on rgb(16, 24, 39)",
+      "ratio": 11.97,
+      "examples": [
+        "repositories",
+        "pulls",
+        "analytics",
+        "agent-history",
+        "review-overview",
+        "installation-settings",
+        "profile",
+        "public-landing",
+        "installation-return",
+        "onboarding",
+        "findings",
+        "coverage",
+        "execution",
+        "report",
+        "proposal",
+        "specialist-summary",
+        "historical-scanner-evidence",
+        "exact-history"
+      ]
+    },
+    {
+      "colors": "rgb(252, 211, 77) on rgb(16, 24, 39)",
+      "ratio": 12.32,
+      "examples": [
+        "agent-history",
+        "findings",
+        "coverage",
+        "execution",
+        "proposal",
+        "specialist-summary",
+        "historical-scanner-evidence"
+      ]
+    },
+    {
+      "colors": "rgb(134, 239, 172) on rgb(16, 24, 39)",
+      "ratio": 12.65,
+      "examples": [
+        "review-overview",
+        "findings",
+        "coverage",
+        "execution",
+        "report",
+        "proposal"
+      ]
+    },
+    {
+      "colors": "rgb(252, 211, 77) on rgb(12, 19, 32)",
+      "ratio": 12.89,
+      "examples": [
+        "agent-history",
+        "specialist-summary",
+        "historical-scanner-evidence"
+      ]
+    },
+    {
+      "colors": "rgb(241, 245, 249) on rgb(32, 41, 74)",
+      "ratio": 12.97,
+      "examples": [
+        "proposal"
+      ]
+    },
+    {
+      "colors": "rgb(203, 213, 225) on rgb(9, 13, 22)",
+      "ratio": 13.09,
+      "examples": [
+        "repositories",
+        "pulls",
+        "analytics",
+        "agent-history",
+        "review-overview",
+        "installation-settings",
+        "public-landing",
+        "findings",
+        "coverage",
+        "execution",
+        "report",
+        "proposal",
+        "specialist-summary",
+        "historical-scanner-evidence",
+        "exact-history"
+      ]
+    },
+    {
+      "colors": "rgb(134, 239, 172) on rgb(12, 19, 32)",
+      "ratio": 13.24,
+      "examples": [
+        "agent-history",
+        "specialist-summary",
+        "historical-scanner-evidence"
+      ]
+    },
+    {
+      "colors": "rgb(253, 230, 138) on rgb(16, 24, 39)",
+      "ratio": 14.27,
+      "examples": [
+        "analytics",
+        "exact-history"
+      ]
+    },
+    {
+      "colors": "rgb(241, 245, 249) on rgb(24, 34, 56)",
+      "ratio": 14.47,
+      "examples": [
+        "repositories",
+        "pulls",
+        "analytics",
+        "agent-history",
+        "review-overview",
+        "installation-settings",
+        "profile",
+        "onboarding",
+        "findings",
+        "coverage",
+        "execution",
+        "report",
+        "proposal",
+        "specialist-summary",
+        "historical-scanner-evidence",
+        "exact-history"
+      ]
+    },
+    {
+      "colors": "rgb(241, 245, 249) on rgb(16, 24, 39)",
+      "ratio": 16.22,
+      "examples": [
+        "repositories",
+        "pulls",
+        "analytics",
+        "agent-history",
+        "review-overview",
+        "installation-settings",
+        "profile",
+        "public-landing",
+        "callback",
+        "installation-return",
+        "onboarding",
+        "findings",
+        "coverage",
+        "execution",
+        "report",
+        "proposal",
+        "specialist-summary",
+        "historical-scanner-evidence",
+        "exact-history"
+      ]
+    },
+    {
+      "colors": "rgb(241, 245, 249) on rgb(12, 19, 32)",
+      "ratio": 16.97,
+      "examples": [
+        "agent-history",
+        "specialist-summary",
+        "historical-scanner-evidence"
+      ]
+    },
+    {
+      "colors": "rgb(241, 245, 249) on rgb(9, 13, 22)",
+      "ratio": 17.74,
+      "examples": [
+        "repositories",
+        "pulls",
+        "analytics",
+        "agent-history",
+        "review-overview",
+        "installation-settings",
+        "profile",
+        "public-landing",
+        "findings",
+        "coverage",
+        "execution",
+        "report",
+        "proposal",
+        "specialist-summary",
+        "historical-scanner-evidence",
+        "exact-history"
+      ]
+    }
+  ]
+}

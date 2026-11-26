@@ -1,179 +1,62 @@
-import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
+import { ArrowRight, BookOpen, FileCheck2, FlaskConical, ShieldCheck } from 'lucide-react';
 import { safeReturnPath } from '../api/identity';
-import { ShieldCheck, FileCheck2, FlaskConical, BookOpen, GitPullRequest, ArrowRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Button } from '../components/common/Button';
+import { EntryPanel, entryAlert } from '../components/common/EntryPanel';
 import { GithubIcon } from '../components/common/GithubIcon';
+import { SectionCard } from '../components/common/SectionCard';
+import { diagnosticText } from '../components/reviews/diagnosticText';
 
-export const HomePage: React.FC = () => {
+const specialists = [
+  { name: 'Security Agent', icon: ShieldCheck, description: 'Uses recorded scanner results to prioritize security findings in pull request changes.' },
+  { name: 'Quality Agent', icon: FileCheck2, description: 'Checks changes against coding standards and distinguishes verified rules from advisory suggestions.' },
+  { name: 'Test Gaps Agent', icon: FlaskConical, description: 'Flags potential gaps using changed functions and static test references. Can draft starter tests.' },
+  { name: 'Documentation Agent', icon: BookOpen, description: 'Identifies missing or incomplete docstrings and can draft replacements based on function signatures.' },
+];
+
+export function HomePage() {
   const { isAuthenticated, isLoading, busy, authError, refreshSession, loginWithGitHub } = useAuth();
-  const location = useLocation();
-  const from = location.state?.from;
+  const { state } = useLocation();
+  const from = state?.from;
   const returnTo = safeReturnPath(from ? from.pathname + (from.search || '') + (from.hash || '') : '/repos');
-  if (authError) return <div role="alert">{authError} <button onClick={() => void refreshSession()}>Retry sign-in check</button></div>;
+  if (authError) return <EntryPanel title="Check your GitHub session">
+    <p role="alert" className={entryAlert}>{diagnosticText(authError)}</p>
+    <Button variant="secondary" onClick={() => void refreshSession()}>Retry sign-in check</Button>
+  </EntryPanel>;
+  if (isAuthenticated) return <Navigate to={returnTo} replace />;
 
-  // Redirect to /repos when authenticated
-  if (isAuthenticated) {
-    return <Navigate to={returnTo} replace />;
-  }
-
-  const agents = [
-    {
-      name: 'Security Agent',
-      icon: ShieldCheck,
-      color: 'text-primary-400',
-      border: 'border-primary-500/30',
-      description:
-        'Executes Semgrep, Bandit, and Gitleaks deterministic scanners scoped to PR diff hunks. LLM performs fingerprint-locked triage and prioritization without originating findings.',
-      tools: ['Semgrep (SAST)', 'Bandit (Python)', 'Gitleaks (Secrets)'],
-    },
-    {
-      name: 'Quality Agent',
-      icon: FileCheck2,
-      color: 'text-secondary-400',
-      border: 'border-secondary-500/30',
-      description:
-        "Reviews code against retrieved coding standards. Supported measurable rules are verified; other grounded suggestions are clearly labeled advisory.",
-      tools: ['ChromaDB RAG', 'AST Gatekeeper', 'Standards Alignment'],
-    },
-    {
-      name: 'Test Gaps Agent',
-      icon: FlaskConical,
-      color: 'text-tertiary-400',
-      border: 'border-tertiary-500/30',
-      description:
-        'Analyzes changed functions and static test references to identify potential test gaps and draft starter unit tests. This is not execution coverage.',
-      tools: ['AST Function Scan', 'Test Discovery', 'Draft Unit Stubs'],
-    },
-    {
-      name: 'Documentation Agent',
-      icon: BookOpen,
-      color: 'text-neutral-300',
-      border: 'border-neutral-700',
-      description:
-        'Inspects modified definitions for missing or incomplete docstrings, drafting accurate docstring replacements aligned to parameter signatures.',
-      tools: ['AST Docstrings', 'Signature Verification', 'Draft Replacements'],
-    },
-  ];
-
-  return (
-    <div className="py-10 space-y-16">
-      {/* Hero Section */}
-      <section className="text-center max-w-4xl mx-auto space-y-6 pt-4">
-        <div className="inline-flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-neutral-900/90 border border-neutral-700/80 text-xs font-mono text-neutral-200 shadow-2xs">
-          <span className="w-2 h-2 rounded-full bg-tertiary-400 motion-safe:animate-pulse" />
-          <span className="font-medium">Multi-Agent LangGraph Orchestration</span>
-        </div>
-
-        <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-neutral-100 font-sans leading-[1.1]">
-          Autonomous <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary-400 via-primary-300 to-secondary-400">DevSecOps Code Reviews</span> for GitHub
-        </h1>
-
-        <p className="text-base sm:text-lg text-neutral-300 leading-relaxed max-w-2xl mx-auto font-normal">
-          CodeGuardian AI orchestrates four specialist agents in parallel to review GitHub pull requests, delivering a single severity-ranked PR comment and optional approval-gated auto-fix branch.
-        </p>
-
-        <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-4">
-          <Button
-            variant="github"
-            id="hero-github-signin-btn"
-            size="lg"
-            disabled={isLoading || busy}
-            onClick={() => void loginWithGitHub(returnTo)}
-            className="shadow-md shadow-primary-950/40 text-sm font-semibold"
-          >
-            <GithubIcon className="w-5 h-5 shrink-0" aria-hidden="true" />
-            <span>Sign in with GitHub</span>
-            <ArrowRight className="w-4 h-4 ml-1" aria-hidden="true" />
-          </Button>
-        </div>
-
-        {/* Feature Badges */}
-        <div className="pt-2 flex flex-wrap items-center justify-center gap-4 text-xs font-mono text-neutral-400">
-          <span className="flex items-center gap-1.5">
-            <span className="text-tertiary-400">✓</span> Zero hallucinated findings
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="text-tertiary-400">✓</span> Deterministic AST gatekeeper
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="text-tertiary-400">✓</span> Human approval required for fixes
-          </span>
-        </div>
-      </section>
-
-      {/* Specialist Agents Grid */}
-      <section aria-labelledby="agents-overview-heading" className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-end justify-between border-b border-neutral-800 pb-4">
-          <div>
-            <h2 id="agents-overview-heading" className="text-xl font-bold tracking-tight text-neutral-100">
-              Four Parallel Specialist Agents
-            </h2>
-            <p className="text-xs sm:text-sm text-neutral-400 mt-1">
-              Deterministic scanners and AST validation feed LLM triage — the model never originates findings.
-            </p>
+  return <div className="space-y-9 py-6 text-fg sm:py-10">
+    <section className="grid items-center gap-8 border-b border-divider pb-8 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+      <div className="space-y-4">
+        <h1 className="max-w-3xl text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">Code review for GitHub pull requests</h1>
+        <p className="max-w-prose text-body text-fg-secondary">Four specialists review pull request changes. Inspect severity-ranked findings in CodeGuardian and read the combined review comment on GitHub.</p>
+        <Button id="hero-github-signin-btn" size="lg" disabled={isLoading || busy} onClick={() => void loginWithGitHub(returnTo)}>
+          <GithubIcon aria-hidden="true" className="size-5 shrink-0" />Sign in with GitHub<ArrowRight aria-hidden="true" className="size-4 shrink-0" />
+        </Button>
+        {isLoading && <p role="status" className="text-support text-fg-muted">Checking your sign-in…</p>}
+        {busy && <p role="status" className="text-support text-fg-muted">Opening GitHub sign-in…</p>}
+      </div>
+      <SectionCard className="space-y-4">
+        <h2 className="text-section">From pull request to review</h2>
+        <ol className="divide-y divide-divider text-support text-fg-secondary">
+          <li className="py-3">Connect the repositories you want to review.</li>
+          <li className="py-3">Review eligible changes automatically or start a review manually.</li>
+          <li className="py-3">Inspect findings and decide whether to approve a proposed test or documentation fix.</li>
+        </ol>
+      </SectionCard>
+    </section>
+    <section aria-labelledby="agents-overview-heading" className="space-y-4">
+      <h2 id="agents-overview-heading" className="text-section md:text-section-wide">Specialist agents</h2>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {specialists.map(({ name, icon: Icon, description }) => <SectionCard key={name} className="space-y-2">
+          <div className="flex items-start gap-2">
+            <Icon aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-link" />
+            <h3 className="text-row-title">{name}</h3>
           </div>
-          <span className="text-xs font-mono text-primary-400 bg-primary-950/40 border border-primary-500/30 px-2.5 py-1 rounded-md mt-2 sm:mt-0 self-start sm:self-auto">
-            Supervisor: LangGraph Aggregator
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
-          {agents.map((agent) => {
-            const Icon = agent.icon;
-            return (
-              <div
-                key={agent.name}
-                className="bg-neutral-900/80 hover:bg-neutral-850/80 border border-neutral-800 hover:border-neutral-700/80 rounded-xl p-6 flex flex-col justify-between transition-all duration-150 shadow-xs group"
-              >
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3.5">
-                    <div className="w-10 h-10 rounded-lg bg-neutral-850 border border-neutral-700/60 flex items-center justify-center group-hover:scale-105 transition-transform">
-                      <Icon className={`w-5 h-5 ${agent.color}`} aria-hidden="true" />
-                    </div>
-                    <div>
-                      <h3 className="text-base font-semibold text-neutral-100 group-hover:text-white transition-colors">
-                        {agent.name}
-                      </h3>
-                      <span className="text-[11px] font-mono text-neutral-400">Specialist worker</span>
-                    </div>
-                  </div>
-                  <p className="text-xs sm:text-sm text-neutral-300 leading-relaxed">
-                    {agent.description}
-                  </p>
-                </div>
-
-                <div className="mt-5 pt-4 border-t border-neutral-800/80 flex flex-wrap gap-2">
-                  {agent.tools.map((tool) => (
-                    <span
-                      key={tool}
-                      className="px-2.5 py-1 rounded-md bg-neutral-950/80 border border-neutral-800 text-xs font-mono text-neutral-300"
-                    >
-                      {tool}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* Architectural Guarantee Section */}
-      <section className="bg-neutral-900/60 border border-neutral-800/90 rounded-xl p-6 sm:p-8 space-y-4 shadow-xs">
-        <div className="flex items-center gap-2.5 pb-2 border-b border-neutral-800/60">
-          <div className="p-1.5 rounded-md bg-primary-500/10 border border-primary-500/20">
-            <GitPullRequest className="w-4 h-4 text-primary-400" aria-hidden="true" />
-          </div>
-          <h2 className="text-sm font-semibold text-neutral-100 uppercase tracking-wider font-mono">
-            Human-Gated Auto-Fix Workflow
-          </h2>
-        </div>
-        <p className="text-xs sm:text-sm text-neutral-300 leading-relaxed">
-          Test-Gap and Documentation agents can generate fixable candidate patches on an isolated branch (<code className="text-primary-300 font-mono bg-neutral-950 px-1.5 py-0.5 rounded border border-neutral-800">codeguardian/fix-pr-N</code>). Security and Quality findings are advisory and never autofixed. Auto-fix branches never merge automatically and require explicit human approval via the dashboard.
-        </p>
-      </section>
-    </div>
-  );
-};
+          <p className="text-support text-fg-secondary">{description}</p>
+        </SectionCard>)}
+      </div>
+    </section>
+  </div>;
+}

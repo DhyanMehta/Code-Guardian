@@ -31,4 +31,15 @@ describe('StatCard component', () => {
 
     expect(screen.getByText('+4 from yesterday')).toBeInTheDocument();
   });
+
+  it('keeps the value and unit as static, non-focusable content', () => {
+    render(<StatCard id="metric" label="Failed / skipped" value="0 / 1" />);
+    const value = screen.getByText('0 / 1');
+    const card = value.closest('#metric');
+    expect(value.tagName).toBe('DD');
+    expect(screen.getByText('Failed / skipped').tagName).toBe('DT');
+    expect(card).not.toHaveAttribute('tabindex');
+    expect(card?.className).not.toMatch(/hover:|cursor-pointer/);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
 });

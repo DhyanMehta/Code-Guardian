@@ -3,31 +3,29 @@ import { render, screen } from '@testing-library/react';
 import { SeverityBadge } from '../components/common/SeverityBadge';
 
 describe('SeverityBadge component', () => {
-  it('renders critical severity with label and icon for accessibility', () => {
-    const { container } = render(<SeverityBadge severity="critical" />);
-    expect(screen.getByText('CRITICAL')).toBeInTheDocument();
-    expect(screen.getByRole('status', { name: /severity: critical/i })).toBeInTheDocument();
-    // Verify an svg icon is rendered inside (shape encoding)
-    expect(container.querySelector('svg')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveClass('bg-severity-critical-bg');
+  it.each([
+    ['critical', 'Critical'],
+    ['high', 'High'],
+    ['medium', 'Medium'],
+    ['low', 'Low'],
+    ['info', 'Info'],
+    ['unknown', 'Unknown'],
+  ])('shows %s as a static text label with a decorative icon', (severity, label) => {
+    const { container } = render(<SeverityBadge severity={severity} />);
+    expect(screen.getByText(label).parentElement).toHaveClass(`bg-risk-${severity}-bg`);
+    expect(container.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
-  it('renders high, medium, and low severities', () => {
-    const { rerender } = render(<SeverityBadge severity="high" />);
-    expect(screen.getByText('HIGH')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveClass('bg-severity-high-bg');
-
-    rerender(<SeverityBadge severity="medium" />);
-    expect(screen.getByText('MEDIUM')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveClass('bg-severity-medium-bg');
-
-    rerender(<SeverityBadge severity="low" />);
-    expect(screen.getByText('LOW')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveClass('bg-severity-low-bg');
+  it('normalizes case and preserves the unknown fallback', () => {
+    const { rerender } = render(<SeverityBadge severity="HIGH" />);
+    expect(screen.getByText('High')).toBeInTheDocument();
+    rerender(<SeverityBadge severity="constructor" />);
+    expect(screen.getByText('Unknown')).toBeInTheDocument();
   });
 
-  it('handles unknown or fallback severity gracefully', () => {
-    render(<SeverityBadge severity="unknown" />);
-    expect(screen.getByText('UNKNOWN')).toBeInTheDocument();
+  it('keeps text available in icon-only mode', () => {
+    render(<SeverityBadge severity="critical" showLabel={false} />);
+    expect(screen.getByText('Critical')).toHaveClass('sr-only');
   });
 });

@@ -13,7 +13,8 @@ describe('IconButton component', () => {
     );
     const button = screen.getByRole('button', { name: /security shield/i });
     expect(button).toBeInTheDocument();
-    expect(screen.getByTestId('shield-icon')).toBeInTheDocument();
+    expect(button).toHaveClass('control-target', 'control-focus');
+    expect(screen.getByTestId('shield-icon').closest('[aria-hidden="true"]')).toBeInTheDocument();
   });
 
   it('handles click events', () => {

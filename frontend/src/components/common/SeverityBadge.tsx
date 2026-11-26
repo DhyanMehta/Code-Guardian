@@ -26,32 +26,32 @@ interface SeverityConfig {
 const severityConfigs: Record<string, SeverityConfig> = {
   critical: {
     label: 'Critical',
-    badgeClass: 'bg-severity-critical-bg text-severity-critical-text border-severity-critical-border',
+    badgeClass: 'bg-risk-critical-bg text-risk-critical',
     icon: OctagonAlert,
   },
   high: {
     label: 'High',
-    badgeClass: 'bg-severity-high-bg text-severity-high-text border-severity-high-border',
+    badgeClass: 'bg-risk-high-bg text-risk-high',
     icon: TriangleAlert,
   },
   medium: {
     label: 'Medium',
-    badgeClass: 'bg-severity-medium-bg text-severity-medium-text border-severity-medium-border',
+    badgeClass: 'bg-risk-medium-bg text-risk-medium',
     icon: CircleAlert,
   },
   low: {
     label: 'Low',
-    badgeClass: 'bg-severity-low-bg text-severity-low-text border-severity-low-border',
+    badgeClass: 'bg-risk-low-bg text-risk-low',
     icon: Info,
   },
   info: {
     label: 'Info',
-    badgeClass: 'bg-severity-info-bg text-severity-info-text border-severity-info-border',
+    badgeClass: 'bg-risk-info-bg text-risk-info',
     icon: HelpCircle,
   },
   unknown: {
     label: 'Unknown',
-    badgeClass: 'bg-severity-unknown-bg text-severity-unknown-text border-severity-unknown-border',
+    badgeClass: 'bg-risk-unknown-bg text-risk-unknown',
     icon: MinusCircle,
   },
 };
@@ -64,25 +64,25 @@ export const SeverityBadge: React.FC<SeverityBadgeProps> = ({
   id,
 }) => {
   const normalizedKey = (severity || 'unknown').toLowerCase();
-  const config = severityConfigs[normalizedKey] || severityConfigs.unknown;
+  const config = Object.hasOwn(severityConfigs, normalizedKey)
+    ? severityConfigs[normalizedKey]
+    : severityConfigs.unknown;
   const IconComponent = config.icon;
 
   const sizeClasses =
     size === 'sm'
-      ? 'px-1.5 py-0.5 text-[11px] gap-1'
-      : 'px-2 py-0.5 text-xs gap-1.5';
+      ? 'px-1.5 py-0.5 gap-1'
+      : 'px-2 py-1 gap-1.5';
 
   const iconSizes = size === 'sm' ? 'w-3 h-3' : 'w-3.5 h-3.5';
 
   return (
     <span
       id={id}
-      role="status"
-      aria-label={`Severity: ${config.label}`}
-      className={`inline-flex items-center font-mono font-medium rounded-md border shrink-0 select-none ${config.badgeClass} ${sizeClasses} ${className}`}
+      className={`inline-flex shrink-0 items-center rounded-md text-meta md:text-meta-wide ${config.badgeClass} ${sizeClasses} ${className}`}
     >
       <IconComponent className={`${iconSizes} shrink-0`} aria-hidden="true" />
-      {showLabel && <span className="uppercase tracking-wider">{config.label.toUpperCase()}</span>}
+      <span className={showLabel ? undefined : 'sr-only'}>{config.label}</span>
     </span>
   );
 };

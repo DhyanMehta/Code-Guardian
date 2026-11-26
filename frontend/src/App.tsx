@@ -11,6 +11,7 @@ import { AuthCallbackPage } from './pages/AuthCallbackPage';
 import { InstallationProvider } from './context/InstallationContext';
 import { ProfilePage } from './pages/ProfilePage';
 import { InstallationReturnPage } from './pages/InstallationReturnPage';
+import { InstallationSettingsPage } from './pages/InstallationSettingsPage';
 
 export const App: React.FC = () => {
   return (
@@ -23,6 +24,7 @@ export const App: React.FC = () => {
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
           <Route path="/auth/install" element={<InstallationReturnPage />} />
           <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+          <Route path="/settings/installation" element={<ProtectedRoute><InstallationSettingsPage /></ProtectedRoute>} />
           <Route path="/reviews/:reviewId" element={<ProtectedRoute><ReviewDetailPage /></ProtectedRoute>} />
 
           {/* Protected Routes */}

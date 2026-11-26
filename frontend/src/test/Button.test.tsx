@@ -8,18 +8,24 @@ describe('Button component', () => {
     expect(screen.getByRole('button', { name: /click me/i })).toBeInTheDocument();
   });
 
-  it('renders all 4 variants', () => {
+  it('uses distinct styles for existing and new action variants', () => {
     const { rerender } = render(<Button variant="primary">Primary</Button>);
-    expect(screen.getByRole('button')).toHaveClass('bg-primary-600');
+    expect(screen.getByRole('button')).toHaveClass('bg-action');
 
     rerender(<Button variant="secondary">Secondary</Button>);
-    expect(screen.getByRole('button')).toHaveClass('bg-neutral-800');
+    expect(screen.getByRole('button')).toHaveClass('bg-action-secondary');
 
     rerender(<Button variant="inverted">Inverted</Button>);
     expect(screen.getByRole('button')).toHaveClass('bg-neutral-100');
 
     rerender(<Button variant="outlined">Outlined</Button>);
-    expect(screen.getByRole('button')).toHaveClass('border-neutral-700');
+    expect(screen.getByRole('button')).toHaveClass('border-control-border');
+
+    rerender(<Button variant="quiet">Quiet</Button>);
+    expect(screen.getByRole('button')).toHaveClass('control-target', 'control-focus', 'bg-transparent');
+
+    rerender(<Button variant="destructive">Destructive</Button>);
+    expect(screen.getByRole('button')).toHaveClass('bg-action-danger');
   });
 
   it('handles click events', () => {
@@ -34,6 +40,8 @@ describe('Button component', () => {
     expect(screen.getByRole('button')).toBeDisabled();
 
     rerender(<Button isLoading>Loading</Button>);
-    expect(screen.getByRole('button')).toBeDisabled();
+    const loading = screen.getByRole('button', { name: 'Loading' });
+    expect(loading).toBeDisabled();
+    expect(loading).toHaveAttribute('aria-busy', 'true');
   });
 });

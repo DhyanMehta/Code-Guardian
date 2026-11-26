@@ -5,14 +5,21 @@ import { useInstallation } from '../context/InstallationContext';
 import { endpoints } from '../api/endpoints';
 import { invalidateResources, useResource } from '../api/resources';
 import { reviewPolling } from '../api/polling';
-import { githubUrl, lookupHistory, positiveId, repoUrl, statusLabel } from '../api/identity';
+import { activeReview, lookupHistory, positiveId, repoUrl } from '../api/identity';
+import type { Snapshot } from '../api/resources';
 import type { ReviewDetail } from '../api/contracts';
 import { AsyncState } from '../components/common/AsyncState';
 import { InstallationPicker } from '../components/common/InstallationPicker';
-import { AgentRunCard, Counts, Coverage, panelClass } from '../components/reviews/ReviewPresentation';
+import { StatusBadge } from '../components/common/StatusBadge';
+import { ReviewDelivery } from '../components/reviews/ReviewDelivery';
+import { ReviewAgentResults } from '../components/reviews/ReviewAgentResults';
 import { FindingsList } from '../components/reviews/FindingsList';
 import { AgentTimeline } from '../components/reviews/AgentTimeline';
-import { AutofixActions } from '../components/reviews/AutofixActions';
+import { ReviewOverview } from '../components/reviews/ReviewOverview';
+import { Button } from '../components/common/Button';
+import { FriendlyTimestamp } from '../components/common/FriendlyTimestamp';
+import { ScopedRefreshStatus } from '../components/common/ScopedRefreshStatus';
+import { AutofixActions, useReviewHead } from '../components/reviews/AutofixActions';
 import { ReviewProgress } from '../components/reviews/ReviewProgress';
 export function ReviewDetailPage() {
   const { reviewId } = useParams();
@@ -39,205 +46,112 @@ function ReviewById({ id }: { id: number | null }) {
     }
   }, [state.data, user]);
   if (!id) return <p role="alert">Invalid review ID.</p>;
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between pb-2 border-b border-neutral-800/60">
-        <button
-          type="button"
-          className="text-xs font-mono font-medium text-primary-400 hover:text-primary-300 underline cursor-pointer"
-          onClick={state.refresh}
-        >
-          Refresh review
-        </button>
-      </div>
-
-      <AsyncState {...state} hasData={!!state.data} />
-
-      {state.monitoringPaused && ['pending', 'failed'].includes(state.data?.delivery_status ?? '') && (
-        <div className="p-3.5 rounded-xl bg-neutral-900 border border-neutral-800 text-sm text-neutral-400">
-          <p className="text-sm text-neutral-400">Automatic delivery monitoring paused after three minutes. Refresh to check again; the server may still retry delivery.</p>
-        </div>
-      )}
-
-      {state.data && <ReviewContent key={state.data.id} review={state.data} />}
+  const refresh = (
+    <div className="flex flex-wrap items-start justify-between gap-x-4">
+      <ScopedRefreshStatus sources={[{ ...state, label: 'Review', hasData: !!state.data,
+        monitoringPaused: state.monitoringPaused && ['pending', 'failed'].includes(state.data?.delivery_status ?? '') }]} />
+      <Button variant="secondary" size="sm" aria-busy={state.loading || undefined} onClick={state.refresh}>Refresh review</Button>
     </div>
   );
+  if (!state.data) return refresh;
+  return <ReviewContent key={state.data.id} review={state.data} refresh={refresh} delayed={!!state.error} paused={!!state.monitoringPaused && ['pending', 'failed'].includes(state.data.delivery_status ?? '')} />;
 }
 
-function ReviewContent({ review: r }: { review: ReviewDetail }) {
+function revisionLabel(r: ReviewDetail, head: Snapshot<string | null>) {
+  if (!r.commit_sha) return 'Reviewed revision not recorded';
+  if (!head.data) return head.loading ? 'Checking current PR head…' : 'Current PR head unconfirmed';
+  const match = head.data === r.commit_sha;
+  if (head.error || head.loading) return match ? 'Matched last loaded PR head' : 'Differs from last loaded PR head';
+  return match ? 'Matches current PR head' : 'Outdated review · PR head changed';
+}
+
+function ReviewContent({ review: r, refresh, delayed, paused }: { review: ReviewDetail; refresh: React.ReactNode; delayed: boolean; paused: boolean }) {
   const { user } = useAuth();
-  const [reportOpen, setReportOpen] = useState(false);
-  const report = useResource(
-    reportOpen && ['completed', 'failed'].includes(r.status) ? `u:${user!.id}:report:${r.id}` : null,
-    s => endpoints.report(r.id, s)
+  const head = useReviewHead(user!.id, r);
+  const active = activeReview(r.status);
+  const workspace = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // The browser may resolve a fragment before the asynchronous record mounts.
+    const reveal = () => {
+      if (window.location.hash.startsWith('#finding-')) return; // FindingsList also resolves targets hidden by filters.
+      const target = document.getElementById(window.location.hash.slice(1));
+      if (!target || !target.closest('.review-workspace')) return;
+      if (target instanceof HTMLDetailsElement) target.open = true;
+      target.scrollIntoView?.({ block: 'start' });
+    };
+    if (window.location.hash) reveal();
+    else {
+      workspace.current?.scrollIntoView?.({ block: 'start' });
+      workspace.current?.querySelector('h1')?.focus({ preventScroll: true });
+    }
+    window.addEventListener('hashchange', reveal);
+    return () => window.removeEventListener('hashchange', reveal);
+  }, [r.id]);
+
+  const [sectionsOpen, setSectionsOpen] = useState(false);
+  const sections = [
+    ['overview', 'Overview'],
+    ...(!active ? [['findings', 'Findings'], ['agents', 'Agent results']] : []),
+    ['execution', 'Execution details'], ['delivery', 'GitHub delivery'],
+    ...(r.autofix.status || (r.status === 'completed' && r.fixable_count > 0) ? [['autofix', 'Auto-fix decisions']] : []),
+  ];
+  const execution = (
+    <section id="execution" aria-label="Execution details" tabIndex={-1} className="scroll-mt-20 space-y-3">
+      <h2 className="text-section">Execution details</h2>
+      <div className="grid gap-x-6 sm:grid-cols-3">
+        <FriendlyTimestamp label="Review created" kind="event" value={r.created_at} />
+        <FriendlyTimestamp label="Execution started" kind="event" value={r.started_at} />
+        <FriendlyTimestamp label="Execution completed" kind="event" value={r.completed_at} />
+      </div>
+      <AgentTimeline review={r} />
+    </section>
   );
-
   return (
-    <div className="space-y-6">
-      {r.installation_id !== null && (
-        <Link className="inline-flex items-center gap-1.5 text-primary-400 hover:text-primary-300 text-sm font-mono transition-colors" to={repoUrl(r.installation_id, r.repo_full_name)}>
-          ← {r.repo_full_name}
-        </Link>
-      )}
-
-      {/* Review Header Banner */}
-      <header className="rounded-xl border border-neutral-800/90 bg-neutral-900/80 p-5 sm:p-6 space-y-4 shadow-xs">
-        <div className="space-y-1.5">
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-neutral-100">
-            Review #{r.id} · {r.repo_full_name} PR #{r.pr_number}
-          </h1>
-          <p className="text-sm text-neutral-400">
-            Revision: <span className="font-mono text-neutral-200">{r.commit_sha ?? 'Not recorded'}</span>
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-neutral-800/60 text-xs font-mono">
-          <p className="text-neutral-200">
-            Analysis: {statusLabel(r.status)}{r.is_fork && ' · Fork PR'}
-          </p>
-          <span className="text-neutral-600">|</span>
-          <p className="text-xs text-neutral-400">
-            Started: {r.started_at ?? 'Not recorded'} · Completed: {r.completed_at ?? 'Not recorded'}
-          </p>
-        </div>
-
-        {r.summary && (
-          <p className="whitespace-pre-wrap text-sm text-neutral-300 leading-relaxed pt-2 border-t border-neutral-800/60">
-            {r.summary}
-          </p>
-        )}
-
-        <div className="pt-2">
-          <Coverage review={r} />
+    <div ref={workspace} className="review-workspace scroll-mt-24 space-y-4 text-fg">
+      <header className="space-y-2 border-b border-divider pb-4">
+        {r.installation_id !== null && <Link className="control-target control-focus inline-flex items-center rounded text-support text-link hover:underline"
+          aria-label={`Back to pull requests for ${r.repo_full_name}`} to={repoUrl(r.installation_id, r.repo_full_name)}>← Pull requests</Link>}
+        <h1 tabIndex={-1} className="text-page outline-none md:text-page-wide">
+          Review #{r.id}<span className="sr-only"> · </span>
+          <span className="mt-1 block text-row-title text-fg-secondary">{r.repo_full_name} <span className="whitespace-nowrap">PR #{r.pr_number}</span></span>
+        </h1>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-support text-fg-secondary">
+          <p className="inline-flex items-center gap-2">Analysis <StatusBadge status={r.status} />{r.is_fork && 'Fork PR'}</p>
+          <div className="flex flex-wrap items-center gap-x-2">
+            {r.commit_sha && <details><summary className="control-focus control-target cursor-pointer content-center rounded text-link">Revision <code>{r.commit_sha.slice(0, 12)}</code></summary>
+              <p className="text-meta">Reviewed commit <code>{r.commit_sha}</code></p>{head.data && <p className="text-meta">Last loaded PR head <code>{head.data}</code></p>}</details>}
+            <span>{revisionLabel(r, head)}</span>
+          </div>
         </div>
       </header>
 
-      <ReviewProgress status={r.status} />
-
-      {(r.status === 'pending' || r.status === 'running') && <AgentTimeline review={r} />}
-
-      {r.status === 'pending' || r.status === 'running' ? (
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-6 text-center">
-          <p className="text-neutral-400">Findings and agent results are not available yet.</p>
+      {delayed && <p className="text-support text-status-degraded">Showing the last loaded review.</p>}
+      {paused && <p className="text-support text-fg-muted">Automatic delivery monitoring paused after three minutes. Refresh to check again; the server may still retry delivery.</p>}
+      <ReviewProgress status={r.status} attempt={r.attempt} />
+      <ReviewOverview review={r} active={active} />
+      {refresh}
+      <nav aria-label="Review sections" className="border-y border-divider">
+        <button type="button" aria-expanded={sectionsOpen} aria-controls="review-section-links" onClick={() => setSectionsOpen(open => !open)}
+          className="control-focus control-target flex w-full items-center justify-between rounded text-control text-link sm:hidden">
+          Jump to review section <span aria-hidden="true">{sectionsOpen ? '▴' : '▾'}</span>
+        </button>
+        <div id="review-section-links" className={`${sectionsOpen ? 'flex' : 'hidden'} flex-wrap gap-x-2 sm:flex`}>
+          {sections.map(([id, label]) => <a key={id} href={`#${id}`} onClick={() => setSectionsOpen(false)} className="control-focus control-target inline-flex items-center rounded-md px-2 text-control text-link hover:bg-panel-raised hover:underline">{label}</a>)}
         </div>
-      ) : (
-        <div className="space-y-6">
-          <div className="space-y-3">
-            <Counts counts={r.severity_counts} />
-            <div className="flex items-center justify-between pt-1">
-              <h2 className="font-semibold text-lg text-neutral-100">{r.finding_count} findings reported</h2>
-            </div>
-          </div>
-
-          {!r.findings.length && (
-            <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-8 text-center text-neutral-400">
-              <p className="text-neutral-400">No findings reported. Check agent coverage before interpreting this result.</p>
-            </div>
-          )}
-
-          <FindingsList findings={r.findings} reviewId={r.id} />
-
-          <div className="space-y-3">
-            <h3 className="text-sm font-mono uppercase tracking-wider text-neutral-400">Agent Fleet Results</h3>
-            <div className="grid sm:grid-cols-2 gap-3">
-              {r.agent_runs.map(run => (
-                <AgentRunCard key={run.agent} run={run} />
-              ))}
-            </div>
-          </div>
-
-          <details className={panelClass}>
-            <summary className="cursor-pointer font-semibold text-neutral-200 hover:text-white">
-              Execution history · attempt {r.attempt}
-            </summary>
-            <div className="pt-3">
-              <AgentTimeline review={r} />
-            </div>
-          </details>
-        </div>
-      )}
-
-      {/* GitHub Delivery Section */}
-      <section className={panelClass}>
-        <h2 className="font-semibold text-base text-neutral-100 pb-2 border-b border-neutral-800/60">GitHub delivery</h2>
-        <div className="space-y-2 text-sm">
-          <p className="font-mono text-xs text-neutral-300">Status: {r.delivery_status ?? 'Not recorded'}</p>
-          {r.delivery_error && <p className="text-severity-medium text-xs">{r.delivery_error}</p>}
-          {r.delivery_status === 'posted' && r.comment_id && (
-            <p>
-              <a
-                className="text-primary-400 hover:text-primary-300 underline font-mono text-xs"
-                href={`${githubUrl(r.repo_full_name)}/pull/${r.pr_number}#issuecomment-${encodeURIComponent(r.comment_id)}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                View GitHub comment
-              </a>
-            </p>
-          )}
-          <p className="text-sm text-neutral-400">Standards version: {r.standards_version ?? 'Default / not recorded'}</p>
-        </div>
-      </section>
-
-      {/* Fix Branch Section */}
-      <section className={panelClass}>
-        <h2 className="font-semibold text-base text-neutral-100 pb-2 border-b border-neutral-800/60">Fix branch</h2>
-        <div className="space-y-2 text-sm">
-          <p className="font-mono text-xs text-neutral-300">Status: {r.autofix.status ?? 'Not created'}</p>
-          {r.autofix.branch && (
-            <p className="font-mono text-xs">
-              Branch: <a className="text-primary-400 hover:text-primary-300 underline" href={`${githubUrl(r.repo_full_name)}/tree/${encodeURIComponent(r.autofix.branch)}`} target="_blank" rel="noreferrer">{r.autofix.branch}</a>
-            </p>
-          )}
-          {r.autofix.commit_sha && (
-            <p className="font-mono text-xs">
-              Commit: <a className="text-primary-400 hover:text-primary-300" href={`${githubUrl(r.repo_full_name)}/commit/${encodeURIComponent(r.autofix.commit_sha)}`}>{r.autofix.commit_sha}</a>
-            </p>
-          )}
-          <p className="text-xs font-mono text-neutral-400">Applied fixes: {r.autofix.applied_count ?? 'Not recorded'}</p>
-          {r.autofix.error && <p role="alert" className="text-severity-critical text-xs">{r.autofix.error}</p>}
-          {r.autofix.skipped_fixes.map((s, i) => (
-            <p key={i} className="text-sm text-neutral-400">
-              Skipped {s.target ?? [s.target_file, s.target_function].filter(Boolean).join(':')}: {s.reason}
-            </p>
-          ))}
-          {r.autofix.approved_by && (
-            <p className="text-xs font-mono text-tertiary-400">
-              Approved by {r.autofix.approved_by} at {r.autofix.approved_at ?? 'time not recorded'}
-            </p>
-          )}
-          <p className="text-xs text-neutral-400 pt-1">
-            Approval records a decision; it does not merge. Rejection does not delete the branch.
-          </p>
-        </div>
-      </section>
-
-      {['completed', 'failed'].includes(r.status) && (
-        <section className={panelClass}>
-          <button
-            type="button"
-            className="text-primary-400 hover:text-primary-300 underline font-mono text-xs cursor-pointer"
-            aria-expanded={reportOpen}
-            onClick={() => setReportOpen(v => !v)}
-          >
-            Saved / rendered report
-          </button>
-          {reportOpen && (
-            <div className="pt-3 space-y-3">
-              <AsyncState {...report} hasData={!!report.data} />
-              {report.data && (
-                <pre className="p-4 rounded-xl bg-code border border-neutral-800 text-xs font-mono text-neutral-200 whitespace-pre-wrap break-words overflow-auto max-h-96">
-                  {report.data.markdown}
-                </pre>
-              )}
-            </div>
-          )}
+      </nav>
+      {!active && <>
+        <section id="findings" tabIndex={-1} aria-label="Findings" className="scroll-mt-20 space-y-3">
+          <h2 className="text-section">Findings</h2>
+          <FindingsList findings={r.findings} reviewId={r.id} total={r.finding_count} standardsVersion={r.standards_version} />
         </section>
-      )}
-
-      <section className={panelClass}>
-        <AutofixActions userId={user!.id} review={r} />
-      </section>
+        <section id="agents" tabIndex={-1} aria-label="Agent results" className="scroll-mt-20 space-y-3">
+          <h2 className="text-section">Agent results</h2>
+          <ReviewAgentResults review={r} />
+        </section>
+      </>}
+      {execution}
+      <ReviewDelivery review={r} userId={user!.id} />
+      <AutofixActions userId={user!.id} review={r} head={head} />
     </div>
   );
 }
