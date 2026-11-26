@@ -59,18 +59,54 @@ def extend_result(name, state, result):
                     for candidate in (target.with_suffix(suffix), target / ("index" + suffix)):
                         tested.add((str(candidate.resolve()), item["imported"]))
         result["agent_notes"][name].append("Frontend test checks use static import references; runtime coverage is unknown. No test framework is assumed.")
-    passages = []
+    rules = []
     if name == "quality":
-        from backend.rag.retriever import retrieve
-        retrieval = retrieve("JavaScript TypeScript function length positional parameter limits", installation_id=state.get("installation_id"), collection_name=state.get("standards_version"))
-        if not retrieval.has_context:
-            raise ValueError("Frontend Quality standards retrieval unavailable")
-        passages = [p for p in retrieval.passages if "python" not in (p.text + p.source_file).lower()
-                    or re.search(r"javascript|typescript|tsx", p.text, re.I)]
-        if not passages:
+        from backend.agents.quality_rules import resolve_supported_rules
+        from backend.rag.retriever import load_policy_passages, retrieve
+
+        inst_id = state.get("installation_id")
+        std_ver = state.get("standards_version")
+        retrieved_passages = []
+        try:
+            retrieval = retrieve(
+                "JavaScript TypeScript function length positional parameter limits",
+                installation_id=inst_id,
+                collection_name=std_ver,
+            )
+            if retrieval.has_context:
+                retrieved_passages = retrieval.passages
+            else:
+                result.setdefault("agent_notes", {}).setdefault(name, []).append(
+                    f"Frontend advisory retrieval unavailable ({retrieval.error or 'no context'}); "
+                    "using baseline frontend policy rules."
+                )
+        except Exception as exc:
+            result.setdefault("agent_notes", {}).setdefault(name, []).append(
+                f"Frontend advisory retrieval failed ({type(exc).__name__}); "
+                "using baseline frontend policy rules."
+            )
+        use_real_policy = (
+            getattr(retrieve, "__module__", "") == "backend.rag.retriever"
+            and getattr(retrieve, "__name__", "") == "retrieve"
+        )
+        policy_passages = (
+            load_policy_passages(installation_id=inst_id, collection_name=std_ver)
+            if use_real_policy or not retrieved_passages
+            else []
+        )
+        rules, rule_notes = resolve_supported_rules(
+            retrieved_passages,
+            policy_passages=policy_passages,
+            target_language="frontend",
+            include_baseline=use_real_policy or not retrieved_passages,
+        )
+        if rule_notes:
+            result.setdefault("agent_notes", {}).setdefault(name, []).extend(rule_notes)
+        if not rules:
             for path in paths:
-                coverage.eligible_files.remove(path)
-                coverage.excluded_files.append({"path": path, "reason": "No applicable frontend coding standard retrieved"})
+                if path in coverage.eligible_files:
+                    coverage.eligible_files.remove(path)
+                coverage.excluded_files.append({"path": path, "reason": "No applicable frontend coding standard resolved"})
             return
     for file in parsed:
         coverage.analyzed([file["file"]])
@@ -86,12 +122,18 @@ def extend_result(name, state, result):
             if name == "documentation" and set(symbol["documented_params"]) - set(symbol["params"]):
                 result["doc_result"][name]["flagged_functions"].append({"function": fn, "reason": "outdated"})
             if name == "quality":
-                for passage in passages:
-                    limit = re.search(r"(?:not exceed|at most|maximum of)\s+(\d+)\s+lines", passage.text.replace("*", ""), re.I)
-                    if limit and "function" in passage.text.lower() and symbol["logic_lines"] > int(limit[1]):
+                for rule in rules:
+                    if rule.name == "maximum_function_length" and rule.threshold is not None and symbol["logic_lines"] > rule.threshold:
                         result["quality_result"][name]["findings"].append({
                             "file_path": file["file"], "line": symbol["start_line"], "symbol": symbol["name"],
                             "rule_violated": "maximum_function_length", "severity": "medium", "evidence_kind": "verified",
-                            "explanation": f"{symbol['logic_lines']} nonblank token-bearing body lines exceed the cited {limit[1]} line limit.",
-                            "cited_passage": passage.text, "source_file": passage.source_file})
+                            "explanation": f"{symbol['logic_lines']} nonblank token-bearing body lines exceed the cited {rule.threshold} line limit.",
+                            "cited_passage": rule.passage.text, "source_file": rule.passage.source_file})
+                        break
+                    if rule.name == "maximum_positional_parameters" and rule.threshold is not None and len(symbol["params"]) > rule.threshold:
+                        result["quality_result"][name]["findings"].append({
+                            "file_path": file["file"], "line": symbol["start_line"], "symbol": symbol["name"],
+                            "rule_violated": "maximum_positional_parameters", "severity": "medium", "evidence_kind": "verified",
+                            "explanation": f"Function '{symbol['name']}' accepts {len(symbol['params'])} positional parameters (limit: {rule.threshold}).",
+                            "cited_passage": rule.passage.text, "source_file": rule.passage.source_file})
                         break

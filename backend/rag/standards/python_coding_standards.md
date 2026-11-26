@@ -1,103 +1,91 @@
-# Python Coding Standards
+# Default Python Coding Standards
 
-This document defines the coding standards enforced by CodeGuardian's Quality Agent.
-Violations are reported as quality findings on pull requests.
-
----
-
-## 1. Naming Conventions
-
-### 1.1 Modules and Packages
-
-- Use short, all-lowercase names.
-- Use underscores to separate words: `user_auth.py`, not `UserAuth.py` or `userauth.py`.
-- Package directories follow the same rule: `data_pipeline/`, not `DataPipeline/`.
-
-### 1.2 Classes
-
-- Use PascalCase (CapitalizedWords): `HttpClient`, `SecurityAgent`, `RawFinding`.
-- Avoid abbreviations unless universally understood (`HTTP`, `URL`, `ID` are acceptable).
-- Exception classes must end with `Error`: `ScannerTimeoutError`, `LLMConfigError`.
-
-### 1.3 Functions and Methods
-
-- Use snake_case: `run_scanner()`, `get_or_create_collection()`.
-- Prefix internal/private helpers with a single underscore: `_parse_response()`.
-- Boolean-returning functions should read as questions: `is_valid()`, `has_findings()`.
-- Avoid generic names (`do_stuff`, `handle`, `process`) without a qualifying noun.
-
-### 1.4 Variables and Constants
-
-- Local variables and parameters: snake_case (`file_path`, `retry_count`).
-- Module-level constants: UPPER_SNAKE_CASE (`MAX_RETRIES`, `DEFAULT_TIMEOUT_SECONDS`).
-- Avoid single-character names outside of comprehensions and trivial loop counters.
-- Boolean variables should read as assertions: `is_active`, `has_error`, `should_retry`.
-
-### 1.5 Type Aliases and TypedDicts
-
-- Type aliases use PascalCase: `RunnerFn`, `ScanResult`.
-- TypedDict classes use PascalCase: `ReviewState`, `PRMetadata`.
+This document defines the default Python coding standards used by CodeGuardian's Quality Agent.
+It is organized into four explicit categories separating deterministic AST enforcement from
+AI-assisted advisory guidance.
 
 ---
 
-## 2. Function Length and Complexity
+## A. Deterministically Enforceable Rules (Python)
 
-### 2.1 Maximum Function Length
+These rules are verified deterministically against Python AST and diff hunks without depending
+on LLM reasoning:
 
-- A single function or method should not exceed **40 lines** of logic (excluding blank
-  lines, decorators, and the docstring).
-- If a function exceeds 40 lines, it must be decomposed into smaller, well-named helpers.
-
-### 2.2 Cyclomatic Complexity
-
-- A function should have a cyclomatic complexity of **10 or less**.
-- Deeply nested conditionals (more than 3 levels) must be refactored using early returns,
-  guard clauses, or helper extraction.
-
-### 2.3 Parameter Count
-
-- Functions should accept **5 or fewer positional parameters**.
-- Use keyword-only arguments (after `*`) or a configuration dataclass when more parameters
-  are needed.
-- Avoid boolean flag parameters that switch behavior; prefer two clearly named methods.
+- **Maximum Function Length (`maximum_function_length`):** A single Python function or method
+  should not exceed **40 lines** of logic (excluding blank lines, decorators, and the docstring).
+  Functions exceeding 40 logic lines must be decomposed into smaller, well-named helpers.
+- **Maximum Positional Parameters (`maximum_positional_parameters`):** Python functions and
+  methods should accept **5 or fewer positional parameters** (excluding `self`/`cls` on methods).
+  Use keyword-only arguments (after `*`) or a configuration dataclass when more parameters are
+  needed.
+- **Postponed Annotations (`future_annotations_import`):** Use `from __future__ import annotations`
+  at the top of every Python module to enable postponed evaluation of type annotations.
 
 ---
 
-## 3. Project-Specific Style Rules
+## B. AI-Assisted Advisory Guidance (Python)
 
-### 3.1 Error Handling
+These principles are evaluated by the Quality Agent's RAG-grounded LLM review when standards
+context is available:
 
-- Every external call (network, subprocess, file I/O) must have explicit error handling.
-- Never use bare `except:` or `except Exception:` without re-raising or logging.
-- Typed exception hierarchies are preferred over generic exceptions. Define a base
-  error class per module/subsystem (`ScannerError`, `LLMError`) and specific subclasses.
-- Errors must include enough context to diagnose without reproducing: include the
-  operation attempted, relevant identifiers, and the underlying cause.
+### B.1 Naming Conventions (PEP 8)
 
-### 3.2 Import Organization
+- **Modules and Packages:** Use short, all-lowercase names with underscores (`user_auth.py`,
+  `data_pipeline/`), not `UserAuth.py` or `DataPipeline/`.
+- **Classes and Exceptions:** Use PascalCase (`HttpClient`, `SecurityAgent`). Exception classes
+  must end with `Error` (`ScannerTimeoutError`, `LLMConfigError`).
+- **Functions and Methods:** Use `snake_case` (`run_scanner()`, `get_or_create_collection()`).
+  Prefix internal helpers with a single underscore (`_parse_response()`). Boolean-returning
+  functions should read as questions (`is_valid()`, `has_findings()`). Avoid generic names
+  (`do_stuff`, `handle`, `process`) without a qualifying noun.
+- **Variables and Constants:** Use `snake_case` for local variables and parameters, and
+  `UPPER_SNAKE_CASE` for module-level constants (`MAX_RETRIES`, `DEFAULT_TIMEOUT_SECONDS`).
+  Avoid single-character names outside comprehensions and trivial loop counters.
 
-- Group imports in this order, separated by blank lines:
-  1. Standard library
-  2. Third-party packages
-  3. Local/project imports
-- Use absolute imports from the package root: `from backend.tools.results import RawFinding`.
-- Never use wildcard imports (`from module import *`).
-- Sort imports alphabetically within each group.
+### B.2 Complexity, Control Flow, and Maintainability
 
-### 3.3 Type Annotations
+- Aim for a cyclomatic complexity of **10 or less** per function.
+- Refactor deeply nested conditionals (more than 3 levels) using early returns, guard clauses,
+  or helper extraction.
+- Avoid boolean flag parameters that switch behavior; prefer two clearly named functions.
+- Prefer pure, single-responsibility helpers and avoid duplicating non-trivial logic across
+  adjacent branches.
 
-- All public functions and methods must have complete type annotations (parameters and
-  return type).
-- Use `from __future__ import annotations` at the top of every module to enable
-  postponed evaluation.
-- Prefer modern syntax: `list[str]` over `List[str]`, `str | None` over `Optional[str]`.
-- Internal helpers may omit annotations when the types are obvious from context, but
-  annotate anything non-trivial.
+### B.3 Error Handling and Resilience
 
-### 3.4 Docstrings
+- Every external call (network, subprocess, file I/O, database) must have explicit error handling.
+- Never use bare `except:` or swallow `except Exception:` silently without re-raising or logging.
+- Prefer typed exception hierarchies over generic exceptions, and include operation context,
+  identifiers, and underlying cause in error messages (never secrets or tokens).
 
-- Public classes and public functions require a one-line docstring at minimum.
-- Multi-line docstrings use the imperative mood in the summary line: "Return the ...",
-  "Parse the ...", not "Returns the ..." or "This function parses ...".
-- Internal helpers (`_prefixed`) do not require docstrings unless the logic is non-obvious.
-- Do not repeat type annotations in the docstring; the type system already documents them.
+### B.4 Imports, Types, and Docstrings (PEP 8 & PEP 257)
+
+- Group imports in order separated by blank lines: (1) standard library, (2) third-party
+  packages, (3) local project imports. Use absolute imports and never use wildcard imports
+  (`from module import *`).
+- All public Python functions and methods should have complete type annotations (parameters
+  and return type), preferring modern syntax (`list[str]`, `str | None`).
+- Public modules, classes, and functions require a concise PEP 257 docstring using imperative
+  mood in the summary line ("Return the ...", "Parse the ...").
+
+---
+
+## C. Python-Specific Conventions Summary
+
+- Follow PEP 8 naming, import ordering, and 4-space indentation conventions.
+- Follow PEP 257 docstring conventions (documented in detail in Section B.4 and checked for
+  missing/outdated signatures by the Documentation Agent).
+- Keep module-level side effects minimal; initialize clients and database engines lazily.
+
+---
+
+## D. Guidance Not Currently Enforceable Deterministically
+
+The following standards are **advisory only** and are **not** enforced deterministically by
+AST predicates:
+
+- Cyclomatic complexity thresholds, nesting depth, and boolean-flag parameter refactoring.
+- Semantic naming quality (e.g., whether a function name is overly generic).
+- Import sorting/grouping, error-handling completeness, and `except Exception` quality.
+- PEP 257 docstring phrasing quality (imperative mood, clarity) beyond missing/outdated parameter
+  detection.

@@ -328,3 +328,11 @@ class TestFullGraph:
         assert "Agent failed:" in notes["quality"][0]
         assert "tg done" in notes["test_gap"]
         assert "doc done" in notes["documentation"]
+
+    def test_aggregate_defaults_missing_outcomes_to_unknown(self, caplog):
+        state = _base_state()
+        state["agent_outcomes"] = {"security": "ok"}
+        with caplog.at_level("INFO"):
+            _aggregate(state)
+        assert "1/4 agents OK" in caplog.text
+        assert "unknown:" in caplog.text

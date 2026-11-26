@@ -539,3 +539,20 @@ class TestRiskScoreNormalization:
         assert result.has_gaps
         assert result.gaps[0].risk_score <= 10
         assert result.gaps[0].risk_score > 0
+
+    def test_relative_package_import_counts_as_tested(self, tmp_path) -> None:
+        _write_file(tmp_path, "pkg/__init__.py", "")
+        _write_file(tmp_path, "pkg/sample.py", """\
+            def score(value):
+                return value * 2
+        """)
+        _write_file(tmp_path, "pkg/test_sample.py", """\
+            from .sample import score
+
+            def test_score():
+                assert score(3) == 6
+        """)
+        diff = "--- a/pkg/sample.py\n+++ b/pkg/sample.py\n@@ -0,0 +1,2 @@\n+def score(value):\n+    return value * 2\n"
+        llm = _FakeLLM(json.dumps({"test_code": "", "imports": []}))
+        result = TestGapAgent(llm_client=llm).run(diff, ["pkg/sample.py"], str(tmp_path))
+        assert not result.gaps

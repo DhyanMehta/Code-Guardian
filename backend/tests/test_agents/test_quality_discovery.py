@@ -133,11 +133,81 @@ def test_discovery_requires_applicable_retrieved_versioned_python_rule(pinned_wo
     agent = QualityAgent(llm_client=Provider(), retriever_fn=retrieve, standards_version="frozen-team-v7")
     assert_pinned_lengths(agent.run(diff, list(sources), str(root)))
     assert calls and all(call["collection_name"] == "frozen-team-v7" for call in calls)
+
+    # Empty/failed retrieval, unrelated passages, and JS-only rules must NOT disable Python baseline checks.
     for unrelated in (RetrievalResult(error="No standards available"), passages("Use meaningful names."),
                       RetrievalResult(passages=[RetrievedPassage(
                           "JavaScript functions should not exceed 2 lines of logic.", "javascript.md", 0.1, "js")])):
-        agent = QualityAgent(llm_client=Provider(), retriever_fn=lambda *a, value=unrelated, **k: value)
-        assert not measured_lengths(agent.run(diff, list(sources), str(root)))
+        agent = QualityAgent(
+            llm_client=Provider(),
+            retriever_fn=lambda *a, value=unrelated, **k: value,
+            include_baseline=True,
+        )
+        result = agent.run(diff, list(sources), str(root))
+        verified = measured_lengths(result)
+        assert set(verified) == set(EXPECTED_LENGTHS)
+        assert "club_summary" not in verified
+        assert "revenue_by_type" not in verified
+
+    # Explicit custom Python override (e.g. 60 lines) overrides the 40-line baseline.
+    override_rule = "A single Python function or method should not exceed 60 lines of logic."
+    agent = QualityAgent(
+        llm_client=Provider(),
+        retriever_fn=lambda *a, **k: passages(override_rule),
+        include_baseline=True,
+    )
+    assert set(measured_lengths(agent.run(diff, list(sources), str(root)))) == {"test_analytics_counts_correct"}
+
+    # Explicit opt-out disables only the opted-out rule while leaving other baseline rules active.
+    opt_out_rule = "Do not enforce maximum_function_length in Python."
+    agent = QualityAgent(
+        llm_client=Provider(),
+        retriever_fn=lambda *a, **k: passages(opt_out_rule),
+        include_baseline=True,
+    )
+    assert not measured_lengths(agent.run(diff, list(sources), str(root)))
+
+
+def test_markdown_item_splitting_and_negation_isolation(tmp_path):
+    from backend.agents.quality_rules import supported_rules
+
+    passage = RetrievedPassage(
+        text=(
+            "- Use `from __future__ import annotations` at the top of every Python module.\n"
+            "- Optional: use `typing.Protocol` for structural interfaces.\n"
+            "- Python functions are not required to have 2 or fewer positional parameters.\n"
+        ),
+        source_file="custom.md",
+        distance=0.1,
+        chunk_id="c1",
+    )
+    rules, notes = supported_rules([passage])
+    assert not notes
+    assert [r.name for r in rules] == ["future_annotations_import"]
+
+
+def test_frontend_rules_ignore_java_and_survive_empty_retrieval(tmp_path, monkeypatch):
+    from backend.agents.frontend_analysis import extend_result
+    from backend.agents.quality_rules import resolve_supported_rules
+    from backend.services.agent_coverage import classify, current
+
+    java_only = RetrievedPassage("Java methods should not exceed 2 lines of logic.", "java.md", 0.1, "j1")
+    rules, _ = resolve_supported_rules([java_only], target_language="frontend", include_baseline=False)
+    assert not rules
+
+    (tmp_path / "widget.ts").write_text("export function smallWidget(a: number) {\n  return a + 1;\n}\n", encoding="utf-8")
+    diff = "diff --git a/widget.ts b/widget.ts\n--- /dev/null\n+++ b/widget.ts\n@@ -0,0 +1,3 @@\n+export function smallWidget(a: number) {\n+  return a + 1;\n+}\n"
+    state = {"workspace_path": str(tmp_path), "diff": diff, "pr": type("PR", (), {"changed_files": ["widget.ts"]})()}
+    out = {"quality_result": {"quality": {"findings": []}}, "agent_notes": {"quality": []}}
+    monkeypatch.setattr("backend.rag.retriever.retrieve", lambda *a, **k: RetrievalResult(error="Chroma unavailable"))
+    monkeypatch.setattr("backend.rag.retriever.load_policy_passages", lambda *a, **k: [java_only])
+    token = current.set(classify(["widget.ts"], "quality"))
+    try:
+        extend_result("quality", state, out)
+    finally:
+        current.reset(token)
+    assert out["quality_result"]["quality"]["findings"] == []
+    assert any("baseline" in n.lower() for n in out["agent_notes"]["quality"])
 
 
 def test_discovery_limits_findings_to_changed_functions(tmp_path):

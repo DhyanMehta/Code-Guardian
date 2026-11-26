@@ -185,7 +185,7 @@ def test_gate_3_git_b_prefix() -> None:
     # Gate 3 integration check
     with tempfile.TemporaryDirectory() as tmpdir:
         src = Path(tmpdir) / "utils.py"
-        src.write_text("def helper(): pass\n", encoding="utf-8")
+        src.write_text("from __future__ import annotations\n\ndef helper(): pass\n", encoding="utf-8")
 
         mock_llm = MagicMock()
         mock_llm.complete.return_value = json.dumps({
@@ -211,7 +211,7 @@ def test_gate_3_git_b_prefix() -> None:
             ]
         })
         agent = QualityAgent(llm_client=mock_llm)
-        diff = "--- a/utils.py\n+++ b/utils.py\n@@ -0,0 +1,1 @@\n+def helper(): pass\n"
+        diff = "--- a/utils.py\n+++ b/utils.py\n@@ -0,0 +1,3 @@\n+from __future__ import annotations\n+\n+def helper(): pass\n"
         result = agent.run(diff, ["utils.py"], tmpdir)
 
         # b/utils.py accepted, b/unrelated.py rejected
@@ -222,7 +222,7 @@ def test_gate_3_git_b_prefix() -> None:
 
 def test_overlong_function_real_pipeline(tmp_path: Path) -> None:
     """Verify real pipeline on a 52-line function / 40-line standard."""
-    func_lines = ["def process_large_dataset(records):"]
+    func_lines = ["from __future__ import annotations", "", "def process_large_dataset(records):"]
     func_lines.extend(f"    x_{i} = {i} * 2" for i in range(50))
     func_lines.append("    return x_49\n")
     code = "\n".join(func_lines)
@@ -231,7 +231,7 @@ def test_overlong_function_real_pipeline(tmp_path: Path) -> None:
     src.write_text(code, encoding="utf-8")
 
     diff = (
-        "--- a/sample.py\n+++ b/sample.py\n@@ -0,0 +1,52 @@\n"
+        "--- a/sample.py\n+++ b/sample.py\n@@ -0,0 +1,54 @@\n"
         + "".join(f"+{line}\n" for line in code.splitlines())
     )
 
@@ -274,5 +274,5 @@ def test_overlong_function_real_pipeline(tmp_path: Path) -> None:
     finding = result.findings[0]
     assert finding.symbol == "process_large_dataset"
     assert finding.file_path == "sample.py"
-    assert finding.line == 1
+    assert finding.line == 3
     assert finding.rule_violated == "maximum_function_length"

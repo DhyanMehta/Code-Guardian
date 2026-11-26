@@ -58,9 +58,9 @@ from backend.agents._validation import (
     find_function,
 )
 from backend.agents._diff_utils import parse_diff_hunks, function_overlaps_diff, bounded_diff_batches
-from backend.agents.quality_rules import evaluate, functions, supported_rules
+from backend.agents.quality_rules import evaluate, functions, resolve_supported_rules, supported_rules
 from backend.agents.state import AgentOutcome
-from backend.rag.retriever import DEFAULT_TOP_K, RetrievedPassage, RetrievalResult, retrieve
+from backend.rag.retriever import DEFAULT_TOP_K, RetrievedPassage, RetrievalResult, load_policy_passages, retrieve
 from backend.tools.llm_client import LLMAuthError, LLMBudgetError, LLMClient, LLMConfigError, LLMError
 
 logger = logging.getLogger(__name__)
@@ -205,6 +205,7 @@ class QualityAgent:
         persist_dir: str | None = None,
         installation_id: int | None = None,
         standards_version: str | None = None,
+        include_baseline: bool | None = None,
     ) -> None:
         self._llm = llm_client
         self._llm_provided = llm_client is not None
@@ -212,6 +213,11 @@ class QualityAgent:
         self._persist_dir = persist_dir
         self._installation_id = installation_id
         self._standards_version = standards_version
+        self._include_baseline = (
+            (self._retriever_fn is retrieve)
+            if include_baseline is None
+            else include_baseline
+        )
 
     def run(
         self,
@@ -276,6 +282,13 @@ class QualityAgent:
 
         from backend.services.agent_coverage import batches_failed
         review_id = getattr(checkpoints, "review_id", None)
+        policy_passages: list[RetrievedPassage] = []
+        if self._retriever_fn is retrieve:
+            policy_passages = load_policy_passages(
+                persist_dir=self._persist_dir,
+                installation_id=target_inst_id,
+                collection_name=self._standards_version,
+            )
         for index, batch in enumerate(batches):
             logger.info("review=%s phase=quality_batch input batch=%d/%d diff_chars=%d",
                         review_id, index + 1, len(batches), len(batch))
@@ -302,6 +315,7 @@ class QualityAgent:
             batch_files = [path for path in (changed_files or []) if path in parsed_files]
             batch_files = batch_files or changed_files or parsed_files
             discovery_saved = checkpoint.load('quality_discovery') if checkpoint else None
+            retrieval_failed_exc = None
             if discovery_saved is not None:
                 stored = discovery_saved['retrieval']
                 retrieval = RetrievalResult(query_text=stored['query_text'], error=stored['error'],
@@ -316,26 +330,38 @@ class QualityAgent:
                 except Exception as exc:
                     logger.warning("review=%s phase=retrieval batch=%d error=%s",
                                    review_id, index + 1, type(exc).__name__)
-                    batches_failed()
-                    result.mark_degraded(f"Batch retrieval failed ({type(exc).__name__}).")
-                    result.notes.append(f'Batch {index + 1} standards retrieval failed ({type(exc).__name__}).')
-                    continue
+                    retrieval_failed_exc = exc
+                    retrieval = RetrievalResult(error=f"Batch retrieval failed ({type(exc).__name__}).")
             result.retrieval_context = retrieval
             logger.info("review=%s phase=retrieval output batch=%d files=%r passages=%d reused=%s",
                         review_id, index + 1, batch_files, len(retrieval.passages), discovery_saved is not None)
-            if not retrieval.has_context:
-                batches_failed()
-                result.mark_degraded(f"No coding-standards context retrieved: {retrieval.error or 'unknown'}")
-                result.notes.append("No relevant coding-standards passages retrieved; cannot perform quality review for this batch.")
-                continue
             if discovery_saved is not None:
                 partial = QualityAgentResult(findings=[QualityFinding(**f) for f in discovery_saved['findings']],
                                              notes=discovery_saved['notes'])
             else:
-                partial = self._discover_verified(retrieval, batch_files, workspace_path, parse_diff_hunks(batch))
-                if checkpoint and partial.outcome is AgentOutcome.OK:
+                partial = self._discover_verified(
+                    retrieval,
+                    batch_files,
+                    workspace_path,
+                    parse_diff_hunks(batch),
+                    policy_passages=policy_passages,
+                    include_baseline=self._include_baseline or (not retrieval.has_context),
+                )
+                if checkpoint and partial.outcome is AgentOutcome.OK and retrieval.has_context:
                     checkpoint.save('quality_discovery', {'findings': [asdict(f) for f in partial.findings],
                         'notes': partial.notes, 'retrieval': asdict(retrieval)})
+            if retrieval_failed_exc is not None:
+                batches_failed()
+                partial.mark_degraded(f"Batch retrieval failed ({type(retrieval_failed_exc).__name__}).")
+                partial.notes.append(f'Batch {index + 1} standards retrieval failed ({type(retrieval_failed_exc).__name__}).')
+                batch_results.append(partial)
+                continue
+            if not retrieval.has_context:
+                batches_failed()
+                partial.mark_degraded(f"No coding-standards context retrieved: {retrieval.error or 'unknown'}")
+                partial.notes.append("No relevant coding-standards passages retrieved; cannot perform advisory quality review for this batch.")
+                batch_results.append(partial)
+                continue
             batch_results.append(partial)
             logger.info("review=%s phase=discovery output batch=%d outcome=%s findings=%d",
                         review_id, index + 1, partial.outcome.value, len(partial.findings))
@@ -380,11 +406,16 @@ class QualityAgent:
         return result
 
     @staticmethod
-    def _discover_verified(retrieval, paths, workspace, changed_ranges):
+    def _discover_verified(retrieval, paths, workspace, changed_ranges, *, policy_passages=None, include_baseline=True):
         result = QualityAgentResult()
         if not workspace:
             return result
-        rules, notes = supported_rules(retrieval.passages)
+        rules, notes = resolve_supported_rules(
+            retrieval.passages,
+            policy_passages=policy_passages,
+            target_language="python",
+            include_baseline=include_baseline,
+        )
         result.notes.extend(notes)
         if notes:
             result.mark_degraded('Applicable coding standards have conflicting thresholds.')

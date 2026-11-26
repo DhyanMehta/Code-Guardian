@@ -184,3 +184,44 @@ def retrieve(
             "No sufficiently relevant standards passages found for the given context."
         )
     return result
+
+
+def load_policy_passages(
+    persist_dir: str | None = None,
+    installation_id: int | None = None,
+    collection_name: str | None = None,
+) -> list[RetrievedPassage]:
+    """Return all passages from the active, pinned, or custom standards collection.
+
+    Unlike ``retrieve()``, this does not depend on embedding similarity distance,
+    so deterministic policy rules remain available even when top-k similarity
+    misses them. Returns an empty list if ChromaDB or the collection is unavailable.
+    """
+    try:
+        col = _get_collection(
+            persist_dir,
+            installation_id=installation_id,
+            collection_name=collection_name,
+        )
+        raw = col.get(include=["documents", "metadatas"])
+    except Exception as exc:
+        logger.warning("Policy passage load failed: %s", exc)
+        return []
+
+    ids = raw.get("ids") or []
+    documents = raw.get("documents") or []
+    metadatas = raw.get("metadatas") or []
+    passages: list[RetrievedPassage] = []
+    for i, doc_text in enumerate(documents):
+        if not doc_text:
+            continue
+        meta = metadatas[i] if i < len(metadatas) and metadatas[i] else {}
+        passages.append(
+            RetrievedPassage(
+                text=doc_text,
+                source_file=meta.get("source_file", "unknown"),
+                distance=0.0,
+                chunk_id=ids[i] if i < len(ids) else "",
+            )
+        )
+    return passages

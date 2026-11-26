@@ -306,11 +306,33 @@ class TestGapAgent:
                     self._analysis_errors.append(f"Could not parse test file {filename}.")
                     continue
 
+                rel_test_path = os.path.relpath(abs_path, workspace_path)
+                base_parts = list(Path(rel_test_path).parent.parts)
+                if base_parts == ["."]:
+                    base_parts = []
+
                 aliases = {}
                 for node in ast.walk(tree):
-                    if isinstance(node, ast.ImportFrom) and node.module:
+                    if isinstance(node, ast.ImportFrom):
+                        if node.level > 0:
+                            up = node.level - 1
+                            pkg_parts = (
+                                base_parts[: len(base_parts) - up]
+                                if up < len(base_parts)
+                                else []
+                            )
+                            if node.module:
+                                module_name = ".".join(pkg_parts + node.module.split("."))
+                            else:
+                                module_name = ".".join(pkg_parts)
+                        elif node.module:
+                            module_name = node.module
+                        else:
+                            continue
                         for item in node.names:
-                            aliases[item.asname or item.name] = node.module + "." + item.name
+                            aliases[item.asname or item.name] = (
+                                f"{module_name}.{item.name}" if module_name else item.name
+                            )
                     elif isinstance(node, ast.Import):
                         for item in node.names:
                             aliases[item.asname or item.name] = item.name

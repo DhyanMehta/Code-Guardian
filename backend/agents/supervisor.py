@@ -185,15 +185,16 @@ def _aggregate(state: ReviewState) -> dict[str, Any]:
     outcomes = state.get("agent_outcomes", {})
     by_outcome: dict[AgentOutcome, list[str]] = {}
     for name in AGENT_NAMES:
-        outcome = AgentOutcome.coerce(outcomes.get(name, AgentOutcome.OK.value))
+        outcome = AgentOutcome.coerce(outcomes.get(name, AgentOutcome.UNKNOWN.value))
         by_outcome.setdefault(outcome, []).append(name)
 
     logger.info(
-        "Aggregation complete: %d/%d agents OK (degraded: %s, failed: %s)",
+        "Aggregation complete: %d/%d agents OK (degraded: %s, failed: %s, unknown: %s)",
         len(by_outcome.get(AgentOutcome.OK, [])),
         len(AGENT_NAMES),
         by_outcome.get(AgentOutcome.DEGRADED) or "none",
         by_outcome.get(AgentOutcome.FAILED) or "none",
+        by_outcome.get(AgentOutcome.UNKNOWN) or "none",
     )
     return {}
 

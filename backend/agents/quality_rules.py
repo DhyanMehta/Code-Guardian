@@ -11,6 +11,8 @@ import io
 import re
 import tokenize
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 from backend.rag.retriever import RetrievedPassage
 
@@ -22,42 +24,198 @@ class SupportedRule:
     passage: RetrievedPassage
 
 
-_FOREIGN_LANGUAGE = re.compile(r"\b(?:javascript|typescript|tsx|jsx|java|golang|rust)\b", re.I)
+_PYTHON_LANGUAGE = re.compile(r"\bpython\b", re.I)
+_FRONTEND_LANGUAGE = re.compile(r"\b(?:javascript|typescript|tsx|jsx)\b", re.I)
+_FOREIGN_LANGUAGE = re.compile(
+    r"\b(?:javascript|typescript|tsx|jsx|java|golang|rust|c\+\+|cpp|c#|csharp|ruby|php|swift|kotlin|scala)\b",
+    re.I,
+)
+_OTHER_NON_FRONTEND_LANGUAGE = re.compile(
+    r"\b(?:python|java|golang|rust|c\+\+|cpp|c#|csharp|ruby|php|swift|kotlin|scala)\b",
+    re.I,
+)
+_UNIVERSAL_LANGUAGE = re.compile(r"\b(?:all languages|every language|language[- ]agnostic)\b", re.I)
 _LENGTH = re.compile(r"\b(?:function|method)s?\b[^.]*?\b(?:not exceed|at most|maximum of)\s+(\d+)\s+lines", re.I)
 _PARAMETERS = re.compile(r"\b(?:function|method)s?\b[^.]*?\b(\d+)\s+or fewer positional parameters", re.I)
 _FUTURE = re.compile(r"\b(?:use|include|require|requires|must have)\s+(?:the\s+)?[`\"]?from __future__ import annotations", re.I)
+_NEGATION = re.compile(r"\b(?:do not|don't|never|not required|need not|no need to|optional(?:ly)?|avoid requiring)\b", re.I)
+_OPTOUT = re.compile(r"\b(?:disable|disabled|opt[- ]?out|do not enforce|skip)\b", re.I)
+_STANDARDS_DIR = Path(__file__).resolve().parents[1] / "rag" / "standards"
+
+
+def _split_items(plain: str) -> list[str]:
+    """Split markdown text into individual list items or paragraphs."""
+    items: list[str] = []
+    for block in re.split(r"\n\s*\n", plain):
+        current: list[str] = []
+        for raw_line in block.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if re.match(r"^(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+)", line):
+                if current:
+                    items.append(" ".join(current))
+                current = [line]
+            else:
+                current.append(line)
+        if current:
+            items.append(" ".join(current))
+    return items
+
+
+@lru_cache(maxsize=1)
+def baseline_passages() -> tuple[RetrievedPassage, ...]:
+    """Load bundled default coding-standards sections as baseline passages."""
+    passages: list[RetrievedPassage] = []
+    if _STANDARDS_DIR.is_dir():
+        for path in sorted(_STANDARDS_DIR.glob("*.md")):
+            text = path.read_text(encoding="utf-8").strip()
+            if not text:
+                continue
+            sections = re.split(r"(?=^##\s+)", text, flags=re.MULTILINE)
+            for idx, section in enumerate(s.strip() for s in sections if s.strip()):
+                passages.append(
+                    RetrievedPassage(
+                        text=section,
+                        source_file=path.name,
+                        distance=0.0,
+                        chunk_id=f"baseline:{path.name}:{idx}",
+                    )
+                )
+    if not passages:
+        passages.append(
+            RetrievedPassage(
+                text=(
+                    "A single Python function or method should not exceed 40 lines of logic "
+                    "(excluding blank lines, decorators, and the docstring).\n"
+                    "Functions should accept 5 or fewer positional parameters.\n"
+                    "Use `from __future__ import annotations` at the top of every Python module."
+                ),
+                source_file="python_coding_standards.md",
+                distance=0.0,
+                chunk_id="baseline:fallback:0",
+            )
+        )
+    return tuple(passages)
+
+
+def _item_applies(item: str, passage_text: str, source_file: str, target_language: str) -> bool:
+    """Return whether a markdown rule item applies to target_language ('python' or 'frontend')."""
+    if target_language == "frontend":
+        item_has_frontend = bool(_FRONTEND_LANGUAGE.search(item) or _UNIVERSAL_LANGUAGE.search(item))
+        passage_has_frontend = bool(
+            _FRONTEND_LANGUAGE.search(passage_text)
+            or _FRONTEND_LANGUAGE.search(source_file)
+            or _UNIVERSAL_LANGUAGE.search(passage_text)
+        )
+        if not (item_has_frontend or passage_has_frontend):
+            return False
+        if _OTHER_NON_FRONTEND_LANGUAGE.search(item) and not _FRONTEND_LANGUAGE.search(item):
+            return False
+        if _OTHER_NON_FRONTEND_LANGUAGE.search(source_file) and not (
+            _FRONTEND_LANGUAGE.search(source_file) or _FRONTEND_LANGUAGE.search(passage_text)
+        ):
+            return False
+        return True
+
+    passage_scope = passage_text + " " + source_file
+    if _FOREIGN_LANGUAGE.search(source_file) and not _PYTHON_LANGUAGE.search(source_file):
+        return False
+    if _FOREIGN_LANGUAGE.search(passage_scope) and not _PYTHON_LANGUAGE.search(passage_scope):
+        return False
+    if _FOREIGN_LANGUAGE.search(item) and not _PYTHON_LANGUAGE.search(item):
+        return False
+    return True
+
+
+def _detect_optouts(item: str, disabled: set[str]) -> None:
+    if not (_OPTOUT.search(item) or _NEGATION.search(item)):
+        return
+    if _LENGTH.search(item) or re.search(r"\b(?:maximum_function_length|function length)\b", item, re.I):
+        disabled.add("maximum_function_length")
+    if _PARAMETERS.search(item) or re.search(r"\b(?:maximum_positional_parameters|positional parameters?)\b", item, re.I):
+        disabled.add("maximum_positional_parameters")
+    if _FUTURE.search(item) or re.search(r"\b(?:future_annotations_import|from __future__ import annotations)\b", item, re.I):
+        disabled.add("future_annotations_import")
+
+
+def extract_rules(
+    passages: list[RetrievedPassage],
+    *,
+    target_language: str = "python",
+) -> tuple[list[SupportedRule], list[str], set[str], set[str]]:
+    """Extract unambiguous supported rules, conflict notes, opt-outs, and conflicts."""
+    candidates: dict[str, dict[int | None, SupportedRule]] = {}
+    disabled: set[str] = set()
+    for passage in passages:
+        plain = passage.text.replace("*", "")
+        for item in _split_items(plain):
+            if not _item_applies(item, plain, passage.source_file, target_language):
+                continue
+            _detect_optouts(item, disabled)
+            if _NEGATION.search(item):
+                continue
+            for name, pattern in (
+                ("maximum_function_length", _LENGTH),
+                ("maximum_positional_parameters", _PARAMETERS),
+            ):
+                if name == "maximum_function_length" and re.search(r"physical|including (?:the )?docstring", item, re.I):
+                    continue
+                for match in pattern.finditer(item):
+                    threshold = int(match[1])
+                    candidates.setdefault(name, {}).setdefault(threshold, SupportedRule(name, threshold, passage))
+            if target_language == "python" and _FUTURE.search(item):
+                name = "future_annotations_import"
+                candidates.setdefault(name, {}).setdefault(None, SupportedRule(name, None, passage))
+
+    rules: list[SupportedRule] = []
+    notes: list[str] = []
+    conflicted: set[str] = set()
+    for name, by_threshold in candidates.items():
+        if len(by_threshold) == 1:
+            if name not in disabled:
+                rules.append(next(iter(by_threshold.values())))
+        else:
+            conflicted.add(name)
+            notes.append(f"Conflicting retrieved thresholds for {name}; no deterministic rule enforced.")
+    return rules, notes, disabled, conflicted
 
 
 def supported_rules(passages: list[RetrievedPassage]) -> tuple[list[SupportedRule], list[str]]:
-    """Return only unambiguous supported rules, keeping their exact citations."""
-    candidates: dict[str, dict[int | None, SupportedRule]] = {}
-    for passage in passages:
-        plain = passage.text.replace('*', '')
-        language = plain + ' ' + passage.source_file
-        if _FOREIGN_LANGUAGE.search(language) and not re.search(r'\bpython\b', language, re.I):
-            continue
-        # A paragraph explicitly scoped to another language must not constrain Python.
-        for paragraph in re.split(r'\n\s*\n', plain):
-            if _FOREIGN_LANGUAGE.search(paragraph) and not re.search(r'\bpython\b', paragraph, re.I):
-                continue
-            for name, pattern in (('maximum_function_length', _LENGTH),
-                                  ('maximum_positional_parameters', _PARAMETERS)):
-                # Physical-span policies need different semantics; never call them logic lines.
-                if name == 'maximum_function_length' and re.search(r'physical|including (?:the )?docstring', paragraph, re.I):
-                    continue
-                for match in pattern.finditer(paragraph):
-                    threshold = int(match[1])
-                    candidates.setdefault(name, {}).setdefault(threshold, SupportedRule(name, threshold, passage))
-            if _FUTURE.search(paragraph) and not re.search(r'\b(?:do not|never|optional|need not)\b', paragraph, re.I):
-                name = 'future_annotations_import'
-                candidates.setdefault(name, {}).setdefault(None, SupportedRule(name, None, passage))
-    rules, notes = [], []
-    for name, by_threshold in candidates.items():
-        if len(by_threshold) == 1:
-            rules.append(next(iter(by_threshold.values())))
-        else:
-            notes.append(f'Conflicting retrieved thresholds for {name}; no deterministic rule enforced.')
+    """Return only unambiguous supported Python rules, keeping their exact citations."""
+    rules, notes, _, _ = extract_rules(passages, target_language="python")
     return rules, notes
+
+
+def resolve_supported_rules(
+    retrieved_passages: list[RetrievedPassage],
+    *,
+    policy_passages: list[RetrievedPassage] | None = None,
+    target_language: str = "python",
+    include_baseline: bool = True,
+) -> tuple[list[SupportedRule], list[str]]:
+    """Merge custom/retrieved rules over built-in baseline rules with explicit precedence."""
+    combined: list[RetrievedPassage] = []
+    seen: set[tuple[str, str]] = set()
+    for passage in [*(policy_passages or []), *retrieved_passages]:
+        key = (passage.source_file, passage.text)
+        if key not in seen:
+            seen.add(key)
+            combined.append(passage)
+
+    custom_rules, notes, disabled, conflicted = extract_rules(combined, target_language=target_language)
+    if not include_baseline:
+        return custom_rules, notes
+
+    base_rules, _, _, _ = extract_rules(list(baseline_passages()), target_language=target_language)
+    merged: dict[str, SupportedRule] = {
+        rule.name: rule
+        for rule in base_rules
+        if rule.name not in disabled and rule.name not in conflicted
+    }
+    for rule in custom_rules:
+        merged[rule.name] = rule
+    return list(merged.values()), notes
 
 
 def functions(tree: ast.AST):
